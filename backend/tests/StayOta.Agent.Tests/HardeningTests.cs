@@ -71,8 +71,6 @@ public class HardeningTests
     [Fact]
     public async Task Gateway_AppliesContractValidationWhenInjected()
     {
-        var (baseGw, _, _) = GatewayFactory.Create();
-        // Rebuild with validator
         var store = new MemoryRefundDataStore();
         var confirm = new MemoryConfirmationStore();
         var idem = new MemoryIdempotencyStore();
