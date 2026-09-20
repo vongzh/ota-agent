@@ -3,12 +3,17 @@
     <div class="workspace-heading">
       <div>
         <h1>运营看板</h1>
-        <p>北极星、漏斗健康度与 Badcase 闭环 — 对齐 StayOTA 运营视图（Demo 示意）。</p>
+        <p>Agent 过程指标：会话、审批、Tool 审计、Eval、Workflow、风险拦截与插件 — 非业务进线量/到账率。</p>
       </div>
       <div class="heading-actions">
+        <button class="ghost-btn" :disabled="loading || wfLoading" @click="refresh">刷新</button>
         <button class="ghost-btn" :disabled="wfLoading" @click="runWorkflowBatch">跑 A–L Workflow</button>
         <button class="primary-btn" :disabled="evalLoading" @click="runOfflineEval">跑 36 条 Eval</button>
       </div>
+    </div>
+
+    <div v-if="loadError" class="banners">
+      <div class="banner danger">{{ loadError }}</div>
     </div>
 
     <div v-if="evalSummary || wfSummary" class="banners">
@@ -18,13 +23,16 @@
 
     <section class="northstar panel">
       <div>
-        <span class="eyebrow">北极星 · Demo</span>
-        <h2>正确退款任务闭环率</h2>
-        <p>结果、金额、权限与流程均正确，且取消 / 退款 / 替代方案得到确认。</p>
+        <span class="eyebrow">{{ summary?.northStar.isProcessMetric ? 'Agent 过程指标' : '北极星' }}</span>
+        <h2>{{ summary?.northStar.label || '加载中…' }}</h2>
+        <p>{{ summary?.northStar.note || '汇总 Session / Audit / Workflow 等本仓数据。' }}</p>
+        <p v-if="summary?.businessNorthStar" class="biz-placeholder">
+          业务北极星「{{ summary.businessNorthStar.label }}」：{{ summary.businessNorthStar.note }}
+        </p>
       </div>
       <div class="northstar-value">
-        <strong>62.4%</strong>
-        <span class="status-pill warning">距目标 -12.6pp</span>
+        <strong>{{ summary?.northStar.value ?? '—' }}</strong>
+        <span class="status-pill neutral">本仓真实数据</span>
       </div>
     </section>
 
@@ -41,16 +49,16 @@
     <section class="panel pad">
       <div class="section-head">
         <h2>处理漏斗</h2>
-        <span class="status-pill neutral">示意数据</span>
+        <span class="status-pill neutral">Agent 过程</span>
       </div>
       <div class="funnel">
         <div class="funnel-row" v-for="row in funnel" :key="row.stage">
           <div class="funnel-label">
             <strong>{{ row.stage }}</strong>
-            <small>流失 {{ row.drop }} · {{ row.note }}</small>
+            <small>相对上一阶差 {{ row.drop }} · {{ row.note }}</small>
           </div>
           <div class="funnel-track">
-            <i :style="{ width: `${(row.in / 10000) * 100}%` }" />
+            <i :style="{ width: `${funnelWidth(row.in)}%` }" />
           </div>
           <div class="funnel-value">{{ row.in.toLocaleString() }}</div>
         </div>
@@ -59,18 +67,18 @@
 
     <section class="panel pad">
       <div class="section-head">
-        <h2>Badcase 生命周期</h2>
+        <h2>风险拦截</h2>
         <div class="lifecycle">
-          <span v-for="s in stages" :key="s" class="status-pill neutral">{{ s }}</span>
+          <span class="status-pill neutral">来自 Tool 审计 Denied</span>
         </div>
       </div>
       <div class="bad-grid">
-        <article v-for="b in badcases" :key="b.type" class="bad-card">
+        <article v-for="b in riskItems" :key="b.type + b.owner">
           <div class="bad-top">
             <strong>{{ b.type }}</strong>
-            <span class="status-pill" :class="b.risk === '高' ? 'danger' : 'warning'">{{ b.risk }}</span>
+            <span class="status-pill" :class="b.risk === '高' ? 'danger' : b.risk === '低' ? 'neutral' : 'warning'">{{ b.risk }}</span>
           </div>
-          <p>{{ b.count }} 件 · Owner {{ b.owner }}</p>
+          <p>{{ b.count }} 次 · Tool {{ b.owner }}</p>
           <div class="stage-chip">{{ b.stage }}</div>
         </article>
       </div>
@@ -79,37 +87,40 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { runAllWorkflows, runEval } from '@/api/agent'
+import { fetchOpsSummary, runAllWorkflows, runEval, type OpsSummary } from '@/api/agent'
 
+const loading = ref(false)
 const evalLoading = ref(false)
 const wfLoading = ref(false)
 const evalSummary = ref('')
 const wfSummary = ref('')
-const stages = ['发现', '修复', '回归验证', '关闭']
+const loadError = ref('')
+const summary = ref<OpsSummary | null>(null)
 
-const metrics = [
-  { group: '结果', name: '一次解决率', value: '71.2%', note: '未达目标，需压缩二次进线', tone: 'warn' },
-  { group: '风险', name: '错误承诺率', value: '1.8%', note: '政策冲突拦截有效', tone: 'ok' },
-  { group: '效率', name: '自动处理覆盖率', value: '54.6%', note: 'L1 场景可继续提升', tone: 'warn' },
-  { group: '能力', name: '规则判断准确率', value: '96.1%', note: '金额与权限不交给模型', tone: 'ok' },
-]
+const metrics = computed(() => summary.value?.metrics ?? [])
+const funnel = computed(() => summary.value?.funnel ?? [])
+const riskItems = computed(() => summary.value?.riskItems ?? [])
 
-const funnel = [
-  { stage: '进线识别', in: 10000, drop: 320, note: '低置信度澄清' },
-  { stage: '订单确认', in: 9680, drop: 410, note: '多订单歧义' },
-  { stage: '规则决策', in: 9270, drop: 880, note: '信息不足' },
-  { stage: '外部协同', in: 8390, drop: 1310, note: '供应商/支付等待' },
-  { stage: '结果确认', in: 7080, drop: 840, note: '到账未确认' },
-]
+const funnelMax = computed(() => Math.max(1, ...funnel.value.map((r) => r.in), 1))
 
-const badcases = [
-  { type: '越权承诺退款', count: 12, risk: '高', stage: '修复', owner: '规则引擎' },
-  { type: '到账预期管理失败', count: 31, risk: '中', stage: '回归验证', owner: '支付协同' },
-  { type: '人工摘要缺失', count: 7, risk: '中', stage: '发现', owner: 'HITL' },
-  { type: '团体写操作未阻断', count: 3, risk: '高', stage: '关闭', owner: '权限门' },
-]
+function funnelWidth(value: number) {
+  return Math.max(2, Math.round((value / funnelMax.value) * 100))
+}
+
+async function refresh() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    summary.value = await fetchOpsSummary()
+  } catch {
+    loadError.value = '加载 /api/ops/summary 失败'
+    message.error(loadError.value)
+  } finally {
+    loading.value = false
+  }
+}
 
 async function runOfflineEval() {
   evalLoading.value = true
@@ -117,6 +128,7 @@ async function runOfflineEval() {
     const res = await runEval()
     evalSummary.value = `Eval ${res.passed}/${res.total} passed，失败 ${res.failed}`
     message.success(evalSummary.value)
+    await refresh()
   } catch {
     message.error('Eval 运行失败')
   } finally {
@@ -130,12 +142,15 @@ async function runWorkflowBatch() {
     const res = await runAllWorkflows()
     wfSummary.value = `Workflow ${res.succeeded}/${res.total} succeeded`
     message.success(wfSummary.value)
+    await refresh()
   } catch {
     message.error('Workflow 运行失败')
   } finally {
     wfLoading.value = false
   }
 }
+
+onMounted(refresh)
 </script>
 
 <style scoped>
@@ -156,6 +171,7 @@ async function runWorkflowBatch() {
 }
 .banner.success { background: var(--color-success-soft); color: var(--color-success); border: 1px solid oklch(0.83 0.055 155); }
 .banner.info { background: var(--color-accent-soft); color: var(--color-accent-strong); border: 1px solid oklch(0.82 0.055 225); }
+.banner.danger { background: var(--color-danger-soft, oklch(0.95 0.03 25)); color: var(--color-danger, oklch(0.45 0.14 25)); border: 1px solid oklch(0.85 0.05 25); }
 
 .northstar {
   display: flex; justify-content: space-between; align-items: center; gap: 1.5rem;
@@ -167,11 +183,12 @@ async function runWorkflowBatch() {
 .eyebrow { font-size: 11px; color: var(--color-ink-muted); letter-spacing: 0.04em; text-transform: uppercase; }
 .northstar h2 { margin: 0.25rem 0 0.35rem; font-size: 1.25rem; }
 .northstar p { margin: 0; color: var(--color-ink-muted); font-size: var(--font-sm); max-width: 42rem; }
+.biz-placeholder { margin-top: 0.55rem !important; font-size: 12px !important; }
 .northstar-value { text-align: right; display: grid; gap: 0.45rem; justify-items: end; }
 .northstar-value strong { font-size: 2.4rem; letter-spacing: -0.03em; line-height: 1; color: var(--color-accent-strong); }
 
 .metric-band {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.85rem; margin-bottom: 1rem;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.85rem; margin-bottom: 1rem;
 }
 .metric { padding: 1rem; position: relative; overflow: hidden; }
 .metric span { font-size: 11px; color: var(--color-ink-muted); }
@@ -208,13 +225,13 @@ async function runWorkflowBatch() {
 .funnel-value { text-align: right; font-weight: 650; font-size: var(--font-sm); }
 
 .bad-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
-.bad-card {
+.bad-grid > article {
   padding: 0.85rem; border: 1px solid var(--color-border); border-radius: var(--radius-md);
   background: var(--color-surface-muted);
 }
 .bad-top { display: flex; justify-content: space-between; gap: 0.5rem; align-items: start; margin-bottom: 0.4rem; }
 .bad-top strong { font-size: var(--font-sm); }
-.bad-card p { margin: 0 0 0.55rem; color: var(--color-ink-muted); font-size: 12px; }
+.bad-grid > article p { margin: 0 0 0.55rem; color: var(--color-ink-muted); font-size: 12px; }
 .stage-chip {
   display: inline-flex; padding: 0.15rem 0.45rem; border-radius: var(--radius-pill);
   background: var(--color-surface); border: 1px solid var(--color-border); font-size: 11px;

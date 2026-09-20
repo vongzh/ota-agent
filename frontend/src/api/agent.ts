@@ -216,6 +216,36 @@ export async function listMcpTools() {
   return data as Array<{ name: string; source: string; access: string; purpose?: string }>
 }
 
+export type OpsSummary = {
+  generatedAt: string
+  source: string
+  northStar: {
+    label: string
+    value: string
+    note: string
+    isProcessMetric: boolean
+  }
+  businessNorthStar: {
+    label: string
+    status: string
+    note: string
+  }
+  metrics: Array<{ group: string; name: string; value: string; note: string; tone: string }>
+  funnel: Array<{ stage: string; in: number; drop: number; note: string }>
+  riskItems: Array<{ type: string; count: number; risk: string; stage: string; owner: string }>
+  sessions: { total: number; withPendingApproval: number; pendingApprovalTotal: number }
+  audits: { total: number; allowed: number; denied: number; denyRate: number }
+  workflows: { total: number; succeeded: number; failed: number; running: number }
+  cases: { total: number; byStatus: Record<string, number> }
+  eval: { caseCount: number }
+  plugins: { count: number; items: Array<{ id: string; displayName: string; isPrimary: boolean }> }
+}
+
+export async function fetchOpsSummary() {
+  const { data } = await http.get<OpsSummary>('/api/ops/summary')
+  return data
+}
+
 export async function invokeTool(payload: {
   toolName: string
   arguments?: Record<string, unknown>

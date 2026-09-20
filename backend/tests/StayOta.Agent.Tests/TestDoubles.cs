@@ -167,6 +167,27 @@ internal sealed class MemoryRefundDataStore : IRefundDataStore
             q.OrderByDescending(a => a.CreatedAt).Take(take).ToList());
     }
 
+    public Task<IReadOnlyList<ToolAuditLog>> ListRecentToolAuditsAsync(int take = 500, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 2000);
+        return Task.FromResult<IReadOnlyList<ToolAuditLog>>(
+            Audits.OrderByDescending(a => a.CreatedAt).Take(take).ToList());
+    }
+
+    public Task<IReadOnlyList<WorkflowRun>> ListRecentWorkflowRunsAsync(int take = 200, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 1000);
+        return Task.FromResult<IReadOnlyList<WorkflowRun>>(
+            WorkflowRuns.OrderByDescending(r => r.StartedAt).Take(take).ToList());
+    }
+
+    public Task<IReadOnlyList<RefundCase>> ListRecentCasesAsync(int take = 200, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 1000);
+        return Task.FromResult<IReadOnlyList<RefundCase>>(
+            Cases.OrderByDescending(c => c.UpdatedAt).Take(take).ToList());
+    }
+
     public IReadOnlyList<ToolContractDto> GetToolContracts() => _contracts;
 
     private static List<ToolContractDto> LoadContracts()

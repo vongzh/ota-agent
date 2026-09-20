@@ -12,6 +12,7 @@ using StayOta.Agent.Abstractions.Plugins;
 using StayOta.Agent.Ai;
 using StayOta.Agent.Diagnostics;
 using StayOta.Agent.Host.Security;
+using StayOta.Agent.Host.Services;
 using StayOta.Agent.Plugins;
 using StayOta.Agent.Plugins.Echo;
 using StayOta.Agent.Plugins.Refund;
@@ -42,6 +43,7 @@ if (builder.Environment.IsProduction())
 builder.Services.AddStayOtaAgent(builder.Configuration);
 builder.Services.AddAgentPlugin<RefundAgentPlugin>(builder.Configuration);
 builder.Services.AddAgentPlugin<EchoAgentPlugin>(builder.Configuration);
+builder.Services.AddScoped<OpsSummaryService>();
 
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService(AgentTelemetry.ServiceName))
