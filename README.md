@@ -66,7 +66,15 @@ curl -X POST http://127.0.0.1:5088/api/eval/run
 curl -X POST http://127.0.0.1:5088/api/workflows/run-all
 ```
 
-GitHub Actions：`.github/workflows/ci.yml`（`dotnet test` + `frontend` build）。
+GitHub Actions：`.github/workflows/ci.yml`（`dotnet test` + pack + `frontend` vitest/build + Playwright `e2e`）。
+
+浏览器 e2e（自包含 mock，CI 默认同款）：
+
+```bash
+cd frontend && npm ci && npm run build && npx playwright install chromium && npm run test:e2e
+```
+
+对接真实 Host / docker-compose：见 [`frontend/e2e/README.md`](./frontend/e2e/README.md)。
 
 可选容器（依赖 compose profile）：
 
