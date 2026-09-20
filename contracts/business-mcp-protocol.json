@@ -1,0 +1,230 @@
+{
+  "protocol": "stayota.business.mcp",
+  "version": "1.0.0",
+  "status": "stable-for-integration",
+  "summary": "Agent-defined contract for StayOTA business systems. The business system implements the MCP server (and optional HTTP twin). The Agent is an MCP client and never the source of truth for orders/payments/policies.",
+  "roles": {
+    "mcp_server": "StayOTA business / order / after-sale services",
+    "mcp_client": "stayota-agent (this repository)",
+    "agent_local_mcp": "Demo-only bridge on Agent /mcp; must not be treated as the production business MCP"
+  },
+  "transport": {
+    "primary": "MCP over HTTP/SSE (Model Context Protocol)",
+    "secondary": "HTTP JSON twin with the same resource semantics",
+    "auth": ["Bearer JWT", "Bearer shared ApiKey (short-term)"],
+    "required_headers": ["Authorization", "X-Request-Id | X-Trace-Id"],
+    "optional_headers": ["X-Tenant-Id", "X-User-Id"]
+  },
+  "response_envelope": {
+    "required": ["ok", "code", "data", "source", "occurred_at", "trace_id", "retryable"],
+    "example": {
+      "ok": true,
+      "code": "OK",
+      "data": {},
+      "source": "stayota-order-service",
+      "occurred_at": "2026-09-20T06:00:00+08:00",
+      "trace_id": "TR-EXAMPLE-001",
+      "retryable": false
+    },
+    "notes": [
+      "MCP tools may return the envelope JSON as a string or structured content; Agent treats non-OK as a tool failure.",
+      "Money, policy, permission and status fields are authoritative; Agent/LLM must not rewrite them."
+    ]
+  },
+  "error_codes_ref": "contracts/tool-errors.json",
+  "versioning": {
+    "compatibility": "additive fields ok; renaming/removing fields or changing money semantics requires a new protocol minor/major",
+    "tool_rename": "keep previous tool name as alias for at least one Agent release"
+  },
+  "phases": {
+    "p0_read": {
+      "required": true,
+      "description": "Minimum for Production:Mode=Mcp|Http read path",
+      "tools": [
+        "stayota_get_order_detail",
+        "stayota_list_user_orders",
+        "stayota_get_policy_snapshot",
+        "stayota_get_refund_status"
+      ]
+    },
+    "p1_write_bridge": {
+      "required": false,
+      "description": "Business write APIs that Agent WRITE tools ultimately call after local gates (confirmation / version / idempotency)",
+      "http_preferred": true,
+      "candidates": [
+        "submit_cancellation",
+        "submit_order_change",
+        "create_supplier_case",
+        "accept_supplier_offer",
+        "create_finance_case",
+        "get_action_result"
+      ],
+      "notes": "Full Agent tool catalog remains in contracts/tool-contracts.json; P1 only lists writes that need a business system executor."
+    }
+  },
+  "mcp_tools": [
+    {
+      "name": "stayota_get_order_detail",
+      "phase": "p0_read",
+      "mode": "READ",
+      "title": "Get authoritative order snapshot",
+      "description": "Return the booking-time order facts and optimistic-lock version for the authenticated user.",
+      "input_schema": {
+        "type": "object",
+        "required": ["orderId", "userId"],
+        "properties": {
+          "orderId": { "type": "string" },
+          "userId": { "type": "string" },
+          "traceId": { "type": "string" }
+        }
+      },
+      "output_data_required": [
+        "order_id",
+        "version",
+        "status",
+        "user_id",
+        "hotel",
+        "dates",
+        "room_count",
+        "amount",
+        "channel_type",
+        "supplier_id",
+        "payment_id",
+        "policy_id"
+      ],
+      "http_twin": {
+        "method": "GET",
+        "path": "/orders/{orderId}",
+        "query": ["userId"]
+      },
+      "aliases_accepted_by_agent": ["get_order_detail", "order_detail"]
+    },
+    {
+      "name": "stayota_list_user_orders",
+      "phase": "p0_read",
+      "mode": "READ",
+      "title": "List orders visible to a user",
+      "description": "Return only orders the user may view, with masked summary fields.",
+      "input_schema": {
+        "type": "object",
+        "required": ["userId"],
+        "properties": {
+          "userId": { "type": "string" },
+          "statusFilter": { "type": "string" },
+          "traceId": { "type": "string" }
+        }
+      },
+      "output_data_required": ["orders"],
+      "output_item_fields": [
+        "order_id",
+        "hotel_name",
+        "city",
+        "check_in",
+        "check_out",
+        "room_type",
+        "paid_amount",
+        "currency",
+        "status"
+      ],
+      "http_twin": {
+        "method": "GET",
+        "path": "/users/{userId}/orders"
+      },
+      "aliases_accepted_by_agent": ["list_user_orders", "list_orders"]
+    },
+    {
+      "name": "stayota_get_policy_snapshot",
+      "phase": "p0_read",
+      "mode": "READ",
+      "title": "Get booking-time policy snapshot",
+      "description": "Return the policy shown at booking time for this order, not the current website policy.",
+      "input_schema": {
+        "type": "object",
+        "required": ["policyId", "orderId"],
+        "properties": {
+          "policyId": { "type": "string" },
+          "orderId": { "type": "string" },
+          "traceId": { "type": "string" }
+        }
+      },
+      "output_data_required": [
+        "policy_id",
+        "version",
+        "effective_from",
+        "timezone",
+        "rule",
+        "user_facing_text",
+        "source_label"
+      ],
+      "http_twin": {
+        "method": "GET",
+        "path": "/policies/{policyId}",
+        "query": ["orderId"]
+      },
+      "aliases_accepted_by_agent": ["get_policy_snapshot", "policy_snapshot"]
+    },
+    {
+      "name": "stayota_get_refund_status",
+      "phase": "p0_read",
+      "mode": "READ",
+      "title": "Get refund / payment-channel status",
+      "description": "Read refund status without translating initiated into received/refunded.",
+      "input_schema": {
+        "type": "object",
+        "required": ["refundId"],
+        "properties": {
+          "refundId": { "type": "string" },
+          "traceId": { "type": "string" }
+        }
+      },
+      "output_data_required": [
+        "refund_id",
+        "status",
+        "amount",
+        "currency",
+        "initiated_at",
+        "channel",
+        "sla_due_at",
+        "waiting_for",
+        "timeline"
+      ],
+      "status_enum": [
+        "NOT_CREATED",
+        "PENDING_APPROVAL",
+        "REFUND_INITIATED",
+        "CHANNEL_PROCESSING",
+        "REFUNDED",
+        "FAILED",
+        "STATUS_UNKNOWN"
+      ],
+      "http_twin": {
+        "method": "GET",
+        "path": "/refunds/{refundId}"
+      },
+      "aliases_accepted_by_agent": ["get_refund_status", "refund_status"]
+    }
+  ],
+  "agent_config": {
+    "production_mode": "Mcp",
+    "settings": {
+      "Production:Mode": "Mcp",
+      "Production:McpEndpoint": "https://stayota.internal/mcp",
+      "Production:ApiKey": "(service credential)"
+    },
+    "http_fallback_mode": {
+      "Production:Mode": "Http",
+      "Production:BaseUrl": "https://orders.internal/"
+    },
+    "rules": [
+      "When Mode=Mcp|Http, Agent must not silently fall back to Mock",
+      "Prefer exact mcp_tools[].name; aliases_accepted_by_agent are compatibility only",
+      "WRITE tools stay behind Agent ToolGateway; business write APIs are P1"
+    ]
+  },
+  "out_of_scope_for_business_mcp": [
+    "Agent conversation / HITL / session APIs",
+    "Offline Eval and demo workflow runners",
+    "Echo sample tools",
+    "Full 33-tool Agent catalog implementation inside business MCP (only P0 reads + P1 write bridges)"
+  ]
+}

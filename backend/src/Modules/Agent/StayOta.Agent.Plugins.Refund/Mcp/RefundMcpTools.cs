@@ -8,7 +8,8 @@ using StayOta.Agent.Abstractions.Domain;
 namespace StayOta.Agent.Plugins.Refund.Mcp;
 
 /// <summary>
-/// Exposes StayOTA refund domain tools over MCP for external agents / production bridges.
+/// Demo-only MCP surface hosted by the Agent. Production business tools must be implemented
+/// by StayOTA systems per <c>contracts/business-mcp-protocol.json</c>; Agent then connects as client.
 /// Endpoint: <c>/mcp</c>
 /// </summary>
 [McpServerToolType]

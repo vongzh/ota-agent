@@ -48,9 +48,18 @@
 - [ ] Gateway 路由：`/ota-agent/**` → Agent 服务；透传 `Authorization` / 租户头
 - [ ] 服务间调用身份：主站 server-to-server 调 Agent 时的 client credentials
 
-### 3.2 订单 / 政策 / 支付只读 API（Production Http 契约）
+### 3.2 订单 / 政策 / 支付只读（**业务 MCP / HTTP 协议**）
 
-Agent `Production:Mode=Http` 期望（可按主站现有 API 改名，但语义要对齐）：
+**权威协议**：[`docs/BUSINESS-MCP-PROTOCOL.md`](./BUSINESS-MCP-PROTOCOL.md) + [`contracts/business-mcp-protocol.json`](../contracts/business-mcp-protocol.json)。
+
+| 角色 | 职责 |
+| --- | --- |
+| StayOTA 业务系统 | **实现** MCP Server（及可选 HTTP 孪生） |
+| 本仓 Agent | **消费**（`Production:Mode=Mcp\|Http`） |
+
+P0 规范 Tool：`stayota_get_order_detail` / `stayota_list_user_orders` / `stayota_get_policy_snapshot` / `stayota_get_refund_status`。
+
+HTTP 孪生（与 MCP 同语义）：
 
 | Agent 用途 | 建议主站接口 |
 | --- | --- |
@@ -90,10 +99,11 @@ Agent `Production:Mode=Http` 期望（可按主站现有 API 改名，但语义�
 
 本仓 Demo 页可继续用 A–L 场景；正式页以「订单上下文」进入，而不是 Demo 场景列表。
 
-### 3.6 MCP（可选）
+### 3.6 MCP（由业务系统实现）
 
-- 主站或外部 Agent 可连本服务 `/mcp` 调 `stayota_*` 只读 Tool  
-- 需与 HTTP 同一套鉴权；生产勿对公网裸奔
+- **正式**：StayOTA 业务系统实现 [`BUSINESS-MCP-PROTOCOL`](./BUSINESS-MCP-PROTOCOL.md) 中的 MCP Server；Agent 配置 `Production:McpEndpoint` 作为 Client 接入  
+- **Demo**：本仓 `/mcp` 仅联调桥接，**不要**当作生产业务 MCP  
+- 鉴权与 HTTP 同一套；生产勿对公网裸奔
 
 ---
 
@@ -109,7 +119,7 @@ Agent `Production:Mode=Http` 期望（可按主站现有 API 改名，但语义�
 | GET | `/api/tools` | Tool 契约列表 |
 | GET | `/api/hosting` | demo/auth 开关 |
 | GET | `/health` `/health/live` `/health/ready` | 探针 |
-| * | `/mcp` | MCP |
+| * | `/mcp` | **Demo-only** Agent 侧桥接（正式业务 MCP 由主站实现） |
 
 Demo-only（正式 `DemoEnabled=false` 关闭）：
 
@@ -138,11 +148,11 @@ src/Hosts/StayOta.Agent.Host   # 独立 Host
 
 ## 5. 落地顺序（建议）
 
-1. **主站提供**只读订单/政策 API + 鉴权 + 网关路由  
-2. **Agent** `Production:Mode=Http` 联调真实读路径；关闭 Mock 回退（已做）  
-3. **写路径**对齐：取消/改期等主站售后 API + 幂等/版本  
+1. **主站按协议实现 P0 MCP**（或 HTTP 孪生）+ 鉴权 + 网关路由  
+2. **Agent** `Production:Mode=Mcp`（或 `Http`）联调真实读路径；关闭 Mock 回退（已做）  
+3. **写路径**对齐：取消/改期等主站售后 API + 幂等/版本（P1）  
 4. **关闭 Demo**（`Hosting:DemoEnabled=false`），独立部署 Agent  
-5. **前端**按 StayOTA 后台风格重做三页，只消费上述 API（本仓 Vue 退役或仅作联调）
+5. **前端**按 StayOTA 后台风格重做页面，只消费 Agent API（本仓 Vue 退役或仅作联调）
 
 ---
 
@@ -150,4 +160,5 @@ src/Hosts/StayOta.Agent.Host   # 独立 Host
 
 - 不在本仓把 Vue 改成「嵌入主站 Layout」的微前端结构  
 - 不要求主站现在就合并代码进同一前端工程  
-- 不把 33 Tool 实现搬进主站；主站只对接 API / 写回执
+- **不把业务真相源 MCP 做在本仓**；本仓只定义协议并作为 Client 消费  
+- 不要求主站实现完整 33 Tool；P0 只读 + P1 写回执即可（见业务 MCP 协议）

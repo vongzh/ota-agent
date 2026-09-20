@@ -17,8 +17,8 @@
 | 场景编排 | `WorkflowBuilder` + `InProcessExecution`（`Microsoft.Agents.AI.Workflows`）；演示含退款 A–L |
 | Tool | `AIFunctionFactory` + `ApprovalRequiredAIFunction`（确认类写操作） |
 | FunctionApproval | `ToolApprovalRequestContent` → `POST /api/agent/approvals` |
-| MCP | `MapMcp("/mcp")`；插件可暴露工具；`Production:Mode=Mcp` 可拉外部工具 |
-| 生产直连 | `Production:Mode=Mock\|Http\|Mcp`（Http 走 BaseUrl 订单/政策 API） |
+| MCP | 业务系统实现 MCP Server（见业务协议）；Agent 为 Client。本仓 `MapMcp("/mcp")` 仅 Demo |
+| 生产直连 | `Production:Mode=Mock\|Http\|Mcp`（Http/Mcp 走业务真相源，不回退 Mock） |
 | 领域门禁 | `ToolGateway`（确认令牌 / 版本 / 幂等 / 审计） |
 | 规则 / 风险 / Eval | Domain + Verifier（随垂直插件） |
 | PG 隔离 | `AgentStorage:Schema=agent`（默认同库 schema 隔离，与垂直业务解耦） |
@@ -95,7 +95,13 @@ export Production__BaseUrl='https://orders.internal/'
 - `DemoEnabled=false`：禁止启动删库、`ResetDemo`、Eval/Workflow 演示端、开放确认签发；**且必须配置 `Hosting:ApiKey`**
 - Http/Mcp：**不**静默回退 Mock；AI 失败不静默降级 Deterministic（除非显式允许）
 
-与主站订单/鉴权等系统对接时，可参考可选说明 [`docs/STAYOTA-INTEGRATION.md`](./docs/STAYOTA-INTEGRATION.md)（非本仓运行前置依赖）。插件编写见 [`docs/PLUGIN-AUTHORING.md`](./docs/PLUGIN-AUTHORING.md)。
+与主站订单/鉴权等系统对接时，请先看业务 MCP/HTTP 协议：
+
+- [`docs/BUSINESS-MCP-PROTOCOL.md`](./docs/BUSINESS-MCP-PROTOCOL.md)（人读）
+- [`contracts/business-mcp-protocol.json`](./contracts/business-mcp-protocol.json)（机读，v1.0.0）
+- 总览：[`docs/STAYOTA-INTEGRATION.md`](./docs/STAYOTA-INTEGRATION.md)
+
+**MCP 由业务系统实现**；本仓 Agent 作为 Client（`Production:Mode=Mcp`）。本仓 `/mcp` 仅为 Demo 桥接。
 
 ## AI 提供商
 
