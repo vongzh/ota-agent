@@ -77,7 +77,7 @@ public class AgentFirstIntegrationTests
         var idem = new MemoryIdempotencyStore();
         var policy = new CompositeToolPolicy([new RefundToolPolicyContribution()]);
         var gateway = new ToolGateway(store, confirm, idem, policy, NullLogger<ToolGateway>.Instance);
-        var catalog = new RefundAiToolCatalog(gateway, store, policy);
+        var catalog = new RefundAiToolCatalog(gateway, store, policy, new RefundToolFailureReplanner());
         agentSessions = new MemoryAgentSessionStore();
         var turn = new DeterministicTurnContext();
         var hitl = new TurnHitlOptions();
@@ -236,7 +236,7 @@ public class PluginModelTests
             new StayOta.Agent.Plugins.Echo.EchoAgentPlugin().ToolPolicy
         ]);
         var gateway = new ToolGateway(store, confirm, idem, policy, NullLogger<ToolGateway>.Instance);
-        var refundCatalog = new RefundAiToolCatalog(gateway, store, policy);
+        var refundCatalog = new RefundAiToolCatalog(gateway, store, policy, new RefundToolFailureReplanner());
         var echoCatalog = new StayOta.Agent.Plugins.Echo.EchoAiToolCatalog();
         var composite = new CompositeAgentToolCatalog([refundCatalog, echoCatalog]);
 

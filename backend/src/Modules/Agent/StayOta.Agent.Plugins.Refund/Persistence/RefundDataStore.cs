@@ -151,7 +151,10 @@ public sealed class RefundDataStore(AppDbContext db) : IRefundDataStore
                 t.GetProperty("purpose").GetString()!,
                 t.TryGetProperty("allowed_conversation_states", out var states)
                     ? states.EnumerateArray().Select(x => x.GetString()!).ToList()
-                    : []))
+                    : [],
+                t.TryGetProperty("input", out var input) && input.TryGetProperty("required", out var req)
+                    ? req.EnumerateArray().Select(x => x.GetString()!).Where(s => !string.IsNullOrWhiteSpace(s)).ToList()!
+                    : null))
             .ToList();
     }
 

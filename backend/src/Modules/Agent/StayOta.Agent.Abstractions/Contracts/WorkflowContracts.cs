@@ -4,7 +4,9 @@ public sealed record ToolContractDto(
     string Name,
     string Mode,
     string Purpose,
-    IReadOnlyList<string> AllowedConversationStates);
+    IReadOnlyList<string> AllowedConversationStates,
+    IReadOnlyList<string>? RequiredInputs = null);
+
 
 public sealed record WorkflowStepDto(
     int SequenceNo,

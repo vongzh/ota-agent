@@ -180,7 +180,10 @@ internal sealed class MemoryRefundDataStore : IRefundDataStore
                 t.GetProperty("purpose").GetString()!,
                 t.TryGetProperty("allowed_conversation_states", out var states)
                     ? states.EnumerateArray().Select(x => x.GetString()!).ToList()
-                    : []))
+                    : [],
+                t.TryGetProperty("input", out var input) && input.TryGetProperty("required", out var req)
+                    ? req.EnumerateArray().Select(x => x.GetString()!).Where(s => !string.IsNullOrWhiteSpace(s)).Cast<string>().ToList()
+                    : null))
             .ToList();
     }
 
@@ -275,7 +278,7 @@ internal static class GatewayFactory
         var confirm = new MemoryConfirmationStore();
         var idem = new MemoryIdempotencyStore();
         var gateway = new ToolGateway(store, confirm, idem, Policy, NullLogger<ToolGateway>.Instance);
-        var catalog = new RefundAiToolCatalog(gateway, store, Policy);
+        var catalog = new RefundAiToolCatalog(gateway, store, Policy, new RefundToolFailureReplanner());
         var tools = new CompositeAgentToolCatalog([catalog]);
         return new ScenarioWorkflow(store, tools, confirm, Policy, new Verifier(), NullLogger<ScenarioWorkflow>.Instance);
     }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Domain.Entities;
+using StayOta.Agent.Abstractions.Security;
 using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Refund.Services;
@@ -40,7 +41,10 @@ public sealed class ToolGateway(
     IConfirmationStore confirmationStore,
     IIdempotencyStore idempotencyStore,
     IToolPolicy toolPolicy,
-    ILogger<ToolGateway> logger) : IToolGateway
+    ILogger<ToolGateway> logger,
+    IToolContractValidator? contractValidator = null,
+    IGuardrailPipeline? guardrails = null,
+    IToolAuthorization? authorization = null) : IToolGateway
 {
     public IReadOnlyList<ToolContractDto> ListContracts() => store.GetToolContracts();
 
@@ -54,6 +58,29 @@ public sealed class ToolGateway(
             return await Audit(call, false, false, null, "missing user identity", ct);
 
         var contract = contracts.First(c => c.Name == call.ToolName);
+
+        var access = toolPolicy.AccessOf(call.ToolName);
+        var authDeny = authorization?.Authorize(CallerContext.Current, call.ToolName, access);
+        if (authDeny is not null)
+            return await Audit(call, false, false, null, authDeny, ct);
+
+        if (contractValidator is not null)
+        {
+            var contractDeny = contractValidator.ValidateRequiredInputs(contract, call);
+            if (contractDeny is not null)
+                return await Audit(call, false, false, null, contractDeny, ct);
+        }
+
+        if (guardrails is not null)
+        {
+            var gr = await guardrails.EvaluateAsync(new GuardrailContext(
+                "tool", call.ToolName, access, null, CallerContext.Current,
+                call.Arguments as IReadOnlyDictionary<string, object?>
+                ?? new Dictionary<string, object?>(call.Arguments)), ct);
+            if (!gr.Allowed)
+                return await Audit(call, false, false, null, gr.DenyReason ?? "guardrail denied", ct);
+        }
+
         if (contract.AllowedConversationStates.Count > 0 &&
             !string.IsNullOrWhiteSpace(call.ConversationState) &&
             !contract.AllowedConversationStates.Contains(call.ConversationState))

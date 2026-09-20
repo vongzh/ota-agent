@@ -1,5 +1,6 @@
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Domain.Entities;
+using StayOta.Agent.Abstractions.Tools;
 using StayOta.Agent.Plugins.Refund.Services;
 using Xunit;
 
@@ -7,20 +8,22 @@ namespace StayOta.Agent.Tests;
 
 public class ToolFailureReplannerTests
 {
+    private readonly IReplanner _replanner = new RefundToolFailureReplanner();
+
     [Fact]
     public void L3Denial_EscalatesToHandoff()
     {
-        var suggestions = ToolFailureReplanner.Suggest(
-            "submit_cancellation", "L3 blocks auto financial write; escalate", "ConfirmCancel", RiskLevel.L3);
+        var suggestions = _replanner.Suggest(new ReplanRequest(
+            "submit_cancellation", "L3 blocks auto financial write; escalate", "ConfirmCancel", RiskLevel.L3));
         Assert.Contains(suggestions, s => s.ToolName == "create_human_handoff");
     }
 
     [Fact]
     public void WrongState_RetriesWithAlternateState()
     {
-        var suggestions = ToolFailureReplanner.Suggest(
+        var suggestions = _replanner.Suggest(new ReplanRequest(
             "get_order_detail", "tool get_order_detail not allowed in state START",
-            "ConfirmCancel", RiskLevel.L1);
+            "ConfirmCancel", RiskLevel.L1));
         Assert.Contains(suggestions, s => s.ToolName == "get_order_detail" && s.ConversationState == "FACTS_REQUIRED");
         Assert.Contains(suggestions, s => s.ToolName == "get_order_detail" && s.Reason.Contains("状态"));
     }
@@ -28,9 +31,18 @@ public class ToolFailureReplannerTests
     [Fact]
     public void ProgressFailure_SuggestsRefundStatus()
     {
-        var suggestions = ToolFailureReplanner.Suggest(
-            "schedule_deadline_action", "temporary failure", "ExplainProgress", RiskLevel.L1);
+        var suggestions = _replanner.Suggest(new ReplanRequest(
+            "schedule_deadline_action", "temporary failure", "ExplainProgress", RiskLevel.L1));
         Assert.Contains(suggestions, s => s.ToolName == "get_refund_status");
+    }
+
+    [Fact]
+    public void CompositeReplanner_UsesPlugin()
+    {
+        IReplanner composite = new CompositeReplanner([new RefundToolFailureReplanner()]);
+        var suggestions = composite.Suggest(new ReplanRequest(
+            "submit_cancellation", "L3 escalate", "ConfirmCancel", RiskLevel.L3));
+        Assert.Contains(suggestions, s => s.ToolName == "create_human_handoff");
     }
 }
 
