@@ -14,10 +14,27 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-      - name: Test
-        run: dotnet test backend/StayOta.Agent.slnx --configuration Release --nologo
+      - name: Test with coverage gate
+        run: >
+          dotnet test backend/StayOta.Agent.slnx
+          --configuration Release
+          --nologo
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:CoverletOutput=../../../artifacts/coverage/
+          /p:ExcludeByFile="**/Migrations/**"
+          /p:Threshold=35
+          /p:ThresholdType=line
+          /p:ThresholdStat=total
         env:
           STAYOTA_AGENT_ROOT: ${{ github.workspace }}
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: artifacts/coverage/
+          if-no-files-found: ignore
 
   pack:
     runs-on: ubuntu-latest
@@ -26,7 +43,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-      - name: Pack Abstractions + Agent + Echo
+      - name: Pack Abstractionsctions + Agent + Echo
         run: bash scripts/pack.sh
       - name: Verify nupkgs
         run: |
@@ -48,4 +65,5 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build

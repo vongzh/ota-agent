@@ -1,5 +1,6 @@
 import axios from 'axios'
 import type { AgentDecision, Scenario, ToolContract } from '@/types'
+import { getScopeId } from '@/utils/scope'
 
 // Prefer same-origin + Vite proxy so Cloud/port-forward previews work.
 // Override with VITE_API_BASE_URL only when API is on another origin.
@@ -9,12 +10,13 @@ const http = axios.create({
 })
 
 const apiKey = import.meta.env.VITE_API_KEY as string | undefined
-if (apiKey) {
-  http.interceptors.request.use((config) => {
-    config.headers['X-Api-Key'] = apiKey
-    return config
-  })
-}
+
+http.interceptors.request.use((config) => {
+  if (apiKey) config.headers['X-Api-Key'] = apiKey
+  const scope = getScopeId()
+  if (scope) config.headers['X-Scope-Id'] = scope
+  return config
+})
 
 export async function fetchHosting() {
   const { data } = await http.get<{ demoEnabled: boolean; authRequired: boolean }>('/api/hosting')
@@ -51,6 +53,8 @@ export async function runAgentMessageStream(
 ): Promise<AgentDecision> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' }
   if (apiKey) headers['X-Api-Key'] = apiKey
+  const scope = getScopeId()
+  if (scope) headers['X-Scope-Id'] = scope
   const base = import.meta.env.VITE_API_BASE_URL || ''
   const res = await fetch(`${base}/api/agent/message/stream`, {
     method: 'POST',
@@ -114,9 +118,26 @@ export async function respondToApproval(payload: {
   return data
 }
 
+export type EvalResultRow = {
+  id: string
+  message: string
+  expectedScenario: string
+  actualScenario: string
+  passed: boolean
+  detail?: string | null
+  expectedAction?: string | null
+  actualAction?: string | null
+  expectedTools?: string[] | null
+  actualTools?: string[] | null
+  expectedMinRefund?: number | null
+  actualRefund?: number | null
+  expectedMaxFee?: number | null
+  actualFee?: number | null
+}
+
 export async function runEval() {
   const { data } = await http.post('/api/eval/run')
-  return data as { total: number; passed: number; failed: number; results: unknown[] }
+  return data as { total: number; passed: number; failed: number; results: EvalResultRow[] }
 }
 
 export async function runAllWorkflows() {
@@ -163,7 +184,17 @@ export async function listSessions(take = 50) {
 
 export async function getSession(sessionId: string) {
   const { data } = await http.get(`/api/agent/sessions/${encodeURIComponent(sessionId)}`)
-  return data
+  return data as {
+    sessionId: string
+    pendingApprovals?: Array<{
+      requestId: string
+      callId: string
+      toolName: string
+      arguments: Record<string, unknown>
+      description: string
+    }>
+    [key: string]: unknown
+  }
 }
 
 export async function deleteSession(sessionId: string) {

@@ -11,6 +11,43 @@ using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Echo;
 
+/// <summary>Minimal Echo vertical intent picks for DeterministicChatClient.</summary>
+file sealed class EchoDeterministicIntentPlanner : IDeterministicIntentPlanner
+{
+    public string PluginId => "echo";
+
+    public IReadOnlyList<string> Select(
+        string message,
+        string conversationState,
+        IReadOnlyCollection<string> availableTools,
+        string? preferredWriteTool = null)
+    {
+        var available = new HashSet<string>(availableTools, StringComparer.Ordinal);
+        var picks = new List<string>();
+        void Add(string name)
+        {
+            if (available.Contains(name) && !picks.Contains(name, StringComparer.Ordinal))
+                picks.Add(name);
+        }
+
+        var msg = message ?? "";
+        if (ContainsAny(msg, "echo", "ping", "连通", "探活", "reflect", "回声"))
+        {
+            Add("echo_ping");
+            if (ContainsAny(msg, "reflect", "回声", "复述"))
+                Add("echo_reflect");
+        }
+
+        if (!string.IsNullOrWhiteSpace(preferredWriteTool))
+            Add(preferredWriteTool!);
+
+        return picks.Take(4).ToList();
+    }
+
+    private static bool ContainsAny(string haystack, params string[] needles) =>
+        needles.Any(n => haystack.Contains(n, StringComparison.OrdinalIgnoreCase));
+}
+
 /// <summary>
 /// Runnable second vertical — tools + policy + MCP, coexists with Refund via composite catalogs.
 /// </summary>
@@ -29,6 +66,7 @@ public sealed class EchoAgentPlugin : IAgentPlugin
     public void ConfigureServices(IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton<IEchoPluginMarker, EchoPluginMarker>();
+        services.AddSingleton<IDeterministicIntentPlanner, EchoDeterministicIntentPlanner>();
         services.AddSingleton<EchoAiToolCatalog>();
         services.AddSingleton<IPluginToolCatalog>(sp => sp.GetRequiredService<EchoAiToolCatalog>());
         // Additive MCP tools (Refund already called AddMcpServer + WithHttpTransport).

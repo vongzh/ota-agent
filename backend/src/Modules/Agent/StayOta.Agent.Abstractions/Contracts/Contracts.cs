@@ -153,7 +153,21 @@ public sealed record EvalCaseDto(
     decimal? MinRefundAmount = null,
     decimal? MaxFeeAmount = null);
 
-public sealed record EvalResultDto(string Id, string Message, string ExpectedScenario, string ActualScenario, bool Passed, string? Detail);
+public sealed record EvalResultDto(
+    string Id,
+    string Message,
+    string ExpectedScenario,
+    string ActualScenario,
+    bool Passed,
+    string? Detail,
+    string? ExpectedAction = null,
+    string? ActualAction = null,
+    IReadOnlyList<string>? ExpectedTools = null,
+    IReadOnlyList<string>? ActualTools = null,
+    decimal? ExpectedMinRefund = null,
+    decimal? ActualRefund = null,
+    decimal? ExpectedMaxFee = null,
+    decimal? ActualFee = null);
 
 public sealed record ConfirmActionRequest(string CaseId, string OrderId, int OrderVersion, string Action, string IdempotencyKey);
 public sealed record ConfirmActionResponse(bool Success, string Message, string? ConfirmationToken = null);

@@ -9,7 +9,7 @@
 | 层 | 实现 |
 | --- | --- |
 | 模块布局 | `StayOta.Agent.Abstractions` + `StayOta.Agent` + `Plugins.Refund` + `StayOta.Agent.Host` |
-| 模型接入 | `IChatClient`（默认 `DeterministicRefundChatClient`，可换成 Azure OpenAI / Foundry） |
+| 模型接入 | `IChatClient`（默认 `DeterministicChatClient` + 插件 `IDeterministicIntentPlanner`，可换成 Azure OpenAI / Foundry） |
 | Agent | `ChatClientAgent`（`Microsoft.Agents.AI`） |
 | A–L 编排 | `WorkflowBuilder` + `InProcessExecution`（`Microsoft.Agents.AI.Workflows`） |
 | 33 Tool | `AIFunctionFactory` + `ApprovalRequiredAIFunction`（确认类写操作） |
