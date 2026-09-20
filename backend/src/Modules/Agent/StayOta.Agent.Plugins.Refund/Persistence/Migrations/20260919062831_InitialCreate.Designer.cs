@@ -20,7 +20,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("agent_refund")
+                .HasDefaultSchema("agent")
                 .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
@@ -51,7 +51,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("case_events", "agent_refund");
+                    b.ToTable("case_events", "agent");
                 });
 
             modelBuilder.Entity("StayOta.Agent.Abstractions.Domain.Entities.HotelOrder", b =>
@@ -123,7 +123,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("OrderId");
 
-                    b.ToTable("orders", "agent_refund");
+                    b.ToTable("orders", "agent");
                 });
 
             modelBuilder.Entity("StayOta.Agent.Abstractions.Domain.Entities.PolicySnapshot", b =>
@@ -164,7 +164,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("PolicyId");
 
-                    b.ToTable("policies", "agent_refund");
+                    b.ToTable("policies", "agent");
                 });
 
             modelBuilder.Entity("StayOta.Agent.Abstractions.Domain.Entities.RefundCase", b =>
@@ -215,7 +215,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("CaseId");
 
-                    b.ToTable("cases", "agent_refund");
+                    b.ToTable("cases", "agent");
                 });
 
             modelBuilder.Entity("StayOta.Agent.Abstractions.Domain.Entities.ScenarioFixture", b =>
@@ -276,7 +276,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("ScenarioId");
 
-                    b.ToTable("scenarios", "agent_refund");
+                    b.ToTable("scenarios", "agent");
                 });
 
             modelBuilder.Entity("StayOta.Agent.Abstractions.Domain.Entities.ToolAuditLog", b =>
@@ -317,7 +317,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("tool_audits", "agent_refund");
+                    b.ToTable("tool_audits", "agent");
                 });
 
             modelBuilder.Entity("StayOta.Agent.Abstractions.Domain.Entities.WorkflowRun", b =>
@@ -353,7 +353,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
                     b.HasKey("RunId");
 
-                    b.ToTable("workflow_runs", "agent_refund");
+                    b.ToTable("workflow_runs", "agent");
                 });
 #pragma warning restore 612, 618
         }

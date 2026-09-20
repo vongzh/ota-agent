@@ -13,11 +13,11 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.EnsureSchema(
-                name: "agent_refund");
+                name: "agent");
 
             migrationBuilder.CreateTable(
                 name: "case_events",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     Id = table.Column<long>(type: "bigint", nullable: false)
@@ -34,7 +34,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "cases",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     CaseId = table.Column<string>(type: "text", nullable: false),
@@ -57,7 +57,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "orders",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     OrderId = table.Column<string>(type: "text", nullable: false),
@@ -86,7 +86,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "policies",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     PolicyId = table.Column<string>(type: "text", nullable: false),
@@ -106,7 +106,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "scenarios",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     ScenarioId = table.Column<string>(type: "text", nullable: false),
@@ -131,7 +131,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "tool_audits",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     Id = table.Column<long>(type: "bigint", nullable: false)
@@ -152,7 +152,7 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "workflow_runs",
-                schema: "agent_refund",
+                schema: "agent",
                 columns: table => new
                 {
                     RunId = table.Column<string>(type: "text", nullable: false),
@@ -175,31 +175,31 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "case_events",
-                schema: "agent_refund");
+                schema: "agent");
 
             migrationBuilder.DropTable(
                 name: "cases",
-                schema: "agent_refund");
+                schema: "agent");
 
             migrationBuilder.DropTable(
                 name: "orders",
-                schema: "agent_refund");
+                schema: "agent");
 
             migrationBuilder.DropTable(
                 name: "policies",
-                schema: "agent_refund");
+                schema: "agent");
 
             migrationBuilder.DropTable(
                 name: "scenarios",
-                schema: "agent_refund");
+                schema: "agent");
 
             migrationBuilder.DropTable(
                 name: "tool_audits",
-                schema: "agent_refund");
+                schema: "agent");
 
             migrationBuilder.DropTable(
                 name: "workflow_runs",
-                schema: "agent_refund");
+                schema: "agent");
         }
     }
 }
