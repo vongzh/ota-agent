@@ -1,13 +1,14 @@
 using StayOta.Agent.Abstractions.Domain;
+using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Refund.Services;
 
-/// <summary>
-/// Suggests fallback tools when a ToolGateway call is denied or fails.
-/// Keeps the agent loop recoverable instead of aborting the pipeline.
-/// </summary>
-public static class ToolFailureReplanner
+/// <summary>Refund-vertical failure recovery (plugin strategy, not framework-hardcoded).</summary>
+public sealed class RefundToolFailureReplanner : IPluginReplanner
 {
+    public IReadOnlyList<ReplanSuggestion> Suggest(ReplanRequest request) =>
+        Suggest(request.FailedTool, request.DenyReason, request.DecisionAction, request.RiskLevel);
+
     public static IReadOnlyList<ReplanSuggestion> Suggest(
         string failedTool,
         string? denyReason,
@@ -33,7 +34,6 @@ public static class ToolFailureReplanner
              reason.Contains("required", StringComparison.OrdinalIgnoreCase) &&
              !reason.Contains("not allowed in state", StringComparison.OrdinalIgnoreCase)))
         {
-            // Do not auto-retry writes without a fresh token — surface HITL.
             suggestions.Add(new("validate_action_permission", "DECISION_READY",
                 "确认令牌无效，回到权限校验等待用户确认"));
             return suggestions;
@@ -55,7 +55,6 @@ public static class ToolFailureReplanner
             return suggestions;
         }
 
-        // Generic recovery by decision action
         switch (decisionAction)
         {
             case "ExplainProgress":
@@ -80,7 +79,6 @@ public static class ToolFailureReplanner
                 break;
         }
 
-        // Never suggest retrying the exact same failed write without a new plan reason.
         return Dedup(suggestions.Where(s => s.ToolName != failedTool || s.Reason.Contains("状态")).ToList());
     }
 
@@ -108,4 +106,14 @@ public static class ToolFailureReplanner
     }
 }
 
-public sealed record ReplanSuggestion(string ToolName, string ConversationState, string Reason);
+/// <summary>Backward-compatible static facade — prefer <see cref="IReplanner"/>.</summary>
+[Obsolete("Use IReplanner / RefundToolFailureReplanner via DI.")]
+public static class ToolFailureReplanner
+{
+    public static IReadOnlyList<ReplanSuggestion> Suggest(
+        string failedTool,
+        string? denyReason,
+        string decisionAction,
+        RiskLevel riskLevel) =>
+        RefundToolFailureReplanner.Suggest(failedTool, denyReason, decisionAction, riskLevel);
+}

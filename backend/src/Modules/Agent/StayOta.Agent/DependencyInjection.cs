@@ -8,6 +8,7 @@ using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Options;
 using StayOta.Agent.Abstractions.Plugins;
+using StayOta.Agent.Abstractions.Security;
 using StayOta.Agent.Abstractions.Tools;
 using StayOta.Agent.Ai;
 using StayOta.Agent.Plugins;
@@ -39,6 +40,9 @@ public static class StayOtaAgentServiceCollectionExtensions
         services.Configure<ProductionOptions>(configuration.GetSection(ProductionOptions.SectionName));
         services.Configure<HostingOptions>(configuration.GetSection(HostingOptions.SectionName));
         services.Configure<AgentStorageOptions>(configuration.GetSection(AgentStorageOptions.SectionName));
+        services.Configure<RateLimitOptions>(configuration.GetSection(RateLimitOptions.SectionName));
+        services.Configure<ToolAuthOptions>(configuration.GetSection(ToolAuthOptions.SectionName));
+        services.Configure<GuardrailOptions>(configuration.GetSection(GuardrailOptions.SectionName));
 
         services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redis));
         services.AddSingleton<IConfirmationStore, RedisConfirmationStore>();
@@ -48,6 +52,12 @@ public static class StayOtaAgentServiceCollectionExtensions
 
         services.AddSingleton<IAgentPluginRegistry, AgentPluginRegistry>();
         services.AddSingleton<IToolPolicy, CompositeToolPolicy>();
+        services.AddSingleton<IReplanner>(sp =>
+            new CompositeReplanner(sp.GetServices<IPluginReplanner>()));
+        services.AddSingleton<IToolContractValidator, StayOta.Agent.Security.ToolContractValidator>();
+        services.AddSingleton<IToolAuthorization, StayOta.Agent.Security.ClaimToolAuthorization>();
+        services.AddSingleton<IGuardrail, StayOta.Agent.Security.BlockedPhraseGuardrail>();
+        services.AddSingleton<IGuardrailPipeline, StayOta.Agent.Security.GuardrailPipeline>();
 
         services.AddSingleton<IChatClientFactory, ChatClientFactory>();
         services.AddScoped<DeterministicTurnContext>();

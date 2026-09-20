@@ -126,7 +126,9 @@ if (hosting.DemoEnabled)
 }
 
 app.UseCors();
+app.UseMiddleware<RateLimitMiddleware>();
 app.UseMiddleware<ApiKeyMiddleware>();
+app.UseMiddleware<CallerIdentityMiddleware>();
 app.MapControllers();
 app.MapMcp("/mcp");
 
