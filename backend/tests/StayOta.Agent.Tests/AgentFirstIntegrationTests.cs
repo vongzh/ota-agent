@@ -79,7 +79,6 @@ public class AgentFirstIntegrationTests
             new IntentService(),
             new PolicyRetrieval(),
             new RulesEngine(),
-            catalog,
             host,
             conversation,
             agentSessions,
