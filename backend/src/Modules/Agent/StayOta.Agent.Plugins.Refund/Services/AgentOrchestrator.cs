@@ -154,54 +154,31 @@ public sealed class AgentOrchestrator(
             ["action"] = decision.Action
         };
 
-        var turnProgress = progress is null
-            ? null
-            : new Progress<AgentStreamEvent>(ev =>
-            {
-                // Avoid duplicating terminal events that HandleCore emits itself.
-                if (ev.Type is "done" or "error") return;
-                progress.Report(ev);
-            });
+        var turnProgress = progress is null ? null : new FilteringProgress(progress);
+
+        var turnRequest = new AgentTurnRequest(
+            request.Message,
+            traceId,
+            userId,
+            order.OrderId,
+            scenario.CaseId,
+            scenario.ScenarioId,
+            decision.RiskLevel,
+            decision.ConversationState,
+            hintTools,
+            suggestedReply,
+            requireFunctionApproval,
+            requireFunctionApproval ? writeToolName : null,
+            ambient,
+            confirmationToken,
+            request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
+            decision.NeedsUserConfirm ? order.Version : null,
+            request.AgentSessionId,
+            AllowAutonomousToolSelection: hintTools.Count == 0);
 
         var agentTurn = turnProgress is null
-            ? await conversation.RunTurnAsync(new AgentTurnRequest(
-                request.Message,
-                traceId,
-                userId,
-                order.OrderId,
-                scenario.CaseId,
-                scenario.ScenarioId,
-                decision.RiskLevel,
-                decision.ConversationState,
-                hintTools,
-                suggestedReply,
-                requireFunctionApproval,
-                requireFunctionApproval ? writeToolName : null,
-                ambient,
-                confirmationToken,
-                request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
-                decision.NeedsUserConfirm ? order.Version : null,
-                request.AgentSessionId,
-                AllowAutonomousToolSelection: hintTools.Count == 0), ct)
-            : await conversation.RunTurnAsync(new AgentTurnRequest(
-                request.Message,
-                traceId,
-                userId,
-                order.OrderId,
-                scenario.CaseId,
-                scenario.ScenarioId,
-                decision.RiskLevel,
-                decision.ConversationState,
-                hintTools,
-                suggestedReply,
-                requireFunctionApproval,
-                requireFunctionApproval ? writeToolName : null,
-                ambient,
-                confirmationToken,
-                request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
-                decision.NeedsUserConfirm ? order.Version : null,
-                request.AgentSessionId,
-                AllowAutonomousToolSelection: hintTools.Count == 0), turnProgress, ct);
+            ? await conversation.RunTurnAsync(turnRequest, ct)
+            : await conversation.RunTurnAsync(turnRequest, turnProgress, ct);
 
         // ConfirmWrite: auto-approve first pending via the unified approvals path (no Orchestrator tool bypass).
         if (request.ConfirmWrite && agentTurn.HasPendingApprovals && agentTurn.PendingApprovals.Count > 0)
@@ -464,6 +441,19 @@ public sealed class AgentOrchestrator(
         : IProgress<AgentStreamEvent>
     {
         public void Report(AgentStreamEvent value) => writer.TryWrite(value);
+    }
+
+    /// <summary>
+    /// Synchronous forwarder — do not use <see cref="Progress{T}"/> here (it posts via SyncContext
+    /// and races with stream completion under Release / CI).
+    /// </summary>
+    private sealed class FilteringProgress(IProgress<AgentStreamEvent> inner) : IProgress<AgentStreamEvent>
+    {
+        public void Report(AgentStreamEvent value)
+        {
+            if (value.Type is "done" or "error") return;
+            inner.Report(value);
+        }
     }
 
     private static bool NeedsEvidence(string scenarioId, AgentSignals signals) =>
