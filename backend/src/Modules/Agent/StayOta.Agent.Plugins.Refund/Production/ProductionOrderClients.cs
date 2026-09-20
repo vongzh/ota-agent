@@ -104,7 +104,8 @@ public sealed class HttpProductionOrderClient(
 }
 
 /// <summary>
-/// Order reads via external MCP tools when Production:Mode=Mcp.
+/// Order reads via external business MCP when Production:Mode=Mcp.
+/// Prefers canonical names from contracts/business-mcp-protocol.json; aliases are fallback only.
 /// Requires Production:McpEndpoint; does not fall back to mock.
 /// </summary>
 public sealed class McpProductionOrderClient(
@@ -116,36 +117,39 @@ public sealed class McpProductionOrderClient(
 
     public Task<object?> GetOrderDetailAsync(string orderId, string userId, CancellationToken ct = default)
         => InvokeAsync(
-            name => name.Contains("get_order", StringComparison.OrdinalIgnoreCase)
-                    || name.Contains("order_detail", StringComparison.OrdinalIgnoreCase),
-            new Dictionary<string, object?> { ["orderId"] = orderId, ["userId"] = userId },
-            "order-detail",
+            preferred: "stayota_get_order_detail",
+            aliases: ["get_order_detail", "order_detail"],
+            args: new Dictionary<string, object?> { ["orderId"] = orderId, ["userId"] = userId },
+            purpose: "order-detail",
             ct);
 
     public Task<object?> ListUserOrdersAsync(string userId, CancellationToken ct = default)
         => InvokeAsync(
-            name => name.Contains("list_user_orders", StringComparison.OrdinalIgnoreCase)
-                    || name.Contains("list_orders", StringComparison.OrdinalIgnoreCase),
-            new Dictionary<string, object?> { ["userId"] = userId },
-            "list-orders",
+            preferred: "stayota_list_user_orders",
+            aliases: ["list_user_orders", "list_orders"],
+            args: new Dictionary<string, object?> { ["userId"] = userId },
+            purpose: "list-orders",
             ct);
 
     public Task<object?> GetPolicySnapshotAsync(string policyId, string orderId, CancellationToken ct = default)
         => InvokeAsync(
-            name => name.Contains("policy", StringComparison.OrdinalIgnoreCase),
-            new Dictionary<string, object?> { ["policyId"] = policyId, ["orderId"] = orderId },
-            "policy",
+            preferred: "stayota_get_policy_snapshot",
+            aliases: ["get_policy_snapshot", "policy_snapshot"],
+            args: new Dictionary<string, object?> { ["policyId"] = policyId, ["orderId"] = orderId },
+            purpose: "policy",
             ct);
 
     public Task<object?> GetRefundStatusAsync(string refundId, CancellationToken ct = default)
         => InvokeAsync(
-            name => name.Contains("refund", StringComparison.OrdinalIgnoreCase),
-            new Dictionary<string, object?> { ["refundId"] = refundId },
-            "refund-status",
+            preferred: "stayota_get_refund_status",
+            aliases: ["get_refund_status", "refund_status"],
+            args: new Dictionary<string, object?> { ["refundId"] = refundId },
+            purpose: "refund-status",
             ct);
 
     private async Task<object?> InvokeAsync(
-        Func<string, bool> match,
+        string preferred,
+        IReadOnlyList<string> aliases,
         Dictionary<string, object?> args,
         string purpose,
         CancellationToken ct)
@@ -165,10 +169,16 @@ public sealed class McpProductionOrderClient(
 
         await using var client = await McpClient.CreateAsync(transport, loggerFactory: loggerFactory, cancellationToken: ct);
         var tools = await client.ListToolsAsync(cancellationToken: ct);
-        var tool = tools.FirstOrDefault(t => match(t.Name))
-                   ?? throw new InvalidOperationException($"No {purpose} tool found on production MCP endpoint");
 
-        logger.LogInformation("Invoking MCP tool {Tool} for {Purpose}", tool.Name, purpose);
+        var tool = tools.FirstOrDefault(t => string.Equals(t.Name, preferred, StringComparison.OrdinalIgnoreCase))
+                   ?? tools.FirstOrDefault(t => aliases.Any(a =>
+                       string.Equals(t.Name, a, StringComparison.OrdinalIgnoreCase)
+                       || t.Name.Contains(a, StringComparison.OrdinalIgnoreCase)))
+                   ?? throw new InvalidOperationException(
+                       $"No {purpose} tool found on production MCP endpoint (expected '{preferred}')");
+
+        logger.LogInformation("Invoking MCP tool {Tool} for {Purpose} (preferred {Preferred})",
+            tool.Name, purpose, preferred);
         var result = await tool.InvokeAsync(new AIFunctionArguments(args), ct);
         return result;
     }
