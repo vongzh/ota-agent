@@ -276,6 +276,7 @@ internal static class GatewayFactory
         var idem = new MemoryIdempotencyStore();
         var gateway = new ToolGateway(store, confirm, idem, Policy, NullLogger<ToolGateway>.Instance);
         var catalog = new RefundAiToolCatalog(gateway, store, Policy);
-        return new ScenarioWorkflow(store, catalog, confirm, Policy, new Verifier(), NullLogger<ScenarioWorkflow>.Instance);
+        var tools = new CompositeAgentToolCatalog([catalog]);
+        return new ScenarioWorkflow(store, tools, confirm, Policy, new Verifier(), NullLogger<ScenarioWorkflow>.Instance);
     }
 }

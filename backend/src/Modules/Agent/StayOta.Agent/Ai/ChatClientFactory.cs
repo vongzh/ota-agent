@@ -19,6 +19,7 @@ public interface IChatClientFactory
 
 public sealed class ChatClientFactory(
     IOptions<AiOptions> options,
+    RuntimeAiOptions runtime,
     ILogger<ChatClientFactory> logger) : IChatClientFactory
 {
     public string ProviderName => ResolveProvider();
@@ -31,8 +32,8 @@ public sealed class ChatClientFactory(
 
         return provider switch
         {
-            "openai" => CreateOpenAi(opts.OpenAI),
-            "ollama" => CreateOllama(opts.Ollama),
+            "openai" => CreateOpenAi(opts.OpenAI, runtime.Model),
+            "ollama" => CreateOllama(opts.Ollama, runtime.Model),
             _ => throw new InvalidOperationException(
                 $"Provider '{provider}' is not a remote LLM; resolve DeterministicRefundChatClient from DI")
         };
@@ -40,6 +41,9 @@ public sealed class ChatClientFactory(
 
     private string ResolveProvider()
     {
+        if (!string.IsNullOrWhiteSpace(runtime.Provider))
+            return runtime.Provider!.Trim().ToLowerInvariant();
+
         var configured = options.Value.Provider?.Trim() ?? "Deterministic";
         var env = Environment.GetEnvironmentVariable("AI_PROVIDER");
         if (!string.IsNullOrWhiteSpace(env))
@@ -47,7 +51,7 @@ public sealed class ChatClientFactory(
         return configured.Trim().ToLowerInvariant();
     }
 
-    private static IChatClient CreateOpenAi(OpenAiOptions cfg)
+    private static IChatClient CreateOpenAi(OpenAiOptions cfg, string? modelOverride)
     {
         var apiKey = FirstNonEmpty(cfg.ApiKey, Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -67,15 +71,17 @@ public sealed class ChatClientFactory(
             client = new OpenAIClient(apiKey);
         }
 
-        var model = FirstNonEmpty(cfg.Model, Environment.GetEnvironmentVariable("OPENAI_MODEL")) ?? "gpt-4o-mini";
+        var model = FirstNonEmpty(modelOverride, cfg.Model, Environment.GetEnvironmentVariable("OPENAI_MODEL"))
+                    ?? "gpt-4o-mini";
         return client.GetChatClient(model).AsIChatClient();
     }
 
-    private static IChatClient CreateOllama(OllamaOptions cfg)
+    private static IChatClient CreateOllama(OllamaOptions cfg, string? modelOverride)
     {
         var endpoint = FirstNonEmpty(cfg.Endpoint, Environment.GetEnvironmentVariable("OLLAMA_ENDPOINT"))
                        ?? "http://127.0.0.1:11434";
-        var model = FirstNonEmpty(cfg.Model, Environment.GetEnvironmentVariable("OLLAMA_MODEL")) ?? "llama3.2";
+        var model = FirstNonEmpty(modelOverride, cfg.Model, Environment.GetEnvironmentVariable("OLLAMA_MODEL"))
+                    ?? "llama3.2";
         return new OllamaApiClient(new Uri(endpoint), model);
     }
 

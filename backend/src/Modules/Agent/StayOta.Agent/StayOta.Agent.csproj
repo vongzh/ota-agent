@@ -5,6 +5,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>StayOta.Agent</RootNamespace>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>StayOta.Agent</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>StayOTA</Authors>
+    <Description>StayOTA Agent runtime (conversation, Redis sessions, composite catalogs). Depends on StayOta.Agent.Abstractions.</Description>
+    <PackageTags>agent;meai;runtime;stayota</PackageTags>
+    <PackageProjectUrl>https://github.com/vongzh/ota-agent</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/vongzh/ota-agent</RepositoryUrl>
+    <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

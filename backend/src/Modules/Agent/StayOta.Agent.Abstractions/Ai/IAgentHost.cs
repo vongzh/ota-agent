@@ -21,6 +21,18 @@ public interface IAgentToolCatalog
 }
 
 /// <summary>
+/// Per-plugin tool catalog contribution. Host merges all into <see cref="IAgentToolCatalog"/>.
+/// </summary>
+public interface IPluginToolCatalog
+{
+    string PluginId { get; }
+    IReadOnlyDictionary<string, AIFunction> Functions { get; }
+    IReadOnlyList<AITool> GetAiTools(bool requireApprovalForWrites = true);
+    Task<ToolResult> InvokeAsync(ToolCall call, CancellationToken ct = default);
+    bool OwnsTool(string toolName);
+}
+
+/// <summary>
 /// Per-request HITL switch: when false, confirm-required tools are not wrapped in ApprovalRequired
 /// (used after business confirmation so Agent→Gateway remains the sole write surface).
 /// </summary>

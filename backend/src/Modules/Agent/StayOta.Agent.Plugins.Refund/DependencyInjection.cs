@@ -64,7 +64,7 @@ public sealed class RefundAgentPlugin : IAgentPlugin
         services.AddScoped<IRulesEngine, RulesEngine>();
         services.AddScoped<IToolGateway, ToolGateway>();
         services.AddScoped<RefundAiToolCatalog>();
-        services.AddScoped<IAgentToolCatalog>(sp => sp.GetRequiredService<RefundAiToolCatalog>());
+        services.AddScoped<IPluginToolCatalog>(sp => sp.GetRequiredService<RefundAiToolCatalog>());
 
         services.AddScoped<MockProductionOrderClient>();
         services.AddScoped<HttpProductionOrderClient>();

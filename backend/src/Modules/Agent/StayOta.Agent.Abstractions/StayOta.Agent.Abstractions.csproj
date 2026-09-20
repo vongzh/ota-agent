@@ -5,7 +5,21 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>StayOta.Agent.Abstractions</RootNamespace>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>StayOta.Agent.Abstractions</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>StayOTA</Authors>
+    <Description>Contracts, plugins, and options for the StayOTA Agent framework. See docs/PLUGIN-AUTHORING.md.</Description>
+    <PackageTags>agent;meai;plugins;stayota</PackageTags>
+    <PackageReadmeFile>PLUGIN-AUTHORING.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/vongzh/ota-agent</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/vongzh/ota-agent</RepositoryUrl>
+    <IsPackable>true</IsPackable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\..\..\docs\PLUGIN-AUTHORING.md" Pack="true" PackagePath="\" Link="PLUGIN-AUTHORING.md" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Agents.AI" Version="1.21.0" />

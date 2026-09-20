@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
+using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Options;
 using StayOta.Agent.Abstractions.Plugins;
 using StayOta.Agent.Ai;
@@ -82,9 +83,15 @@ public class AgentFirstIntegrationTests
         var hitl = new TurnHitlOptions();
         var chat = new DeterministicRefundChatClient(turn);
         var plugin = new RefundAgentPlugin();
-        var registry = new AgentPluginRegistry([plugin]);
+        var echo = new StayOta.Agent.Plugins.Echo.EchoAgentPlugin();
+        var registry = new AgentPluginRegistry([plugin, echo]);
         var services = new ServiceCollection().BuildServiceProvider();
-        var host = new ChatClientAgentHost(chat, catalog, registry, hitl, NullLoggerFactory.Instance, services);
+        var composite = new CompositeAgentToolCatalog(
+        [
+            catalog,
+            new StayOta.Agent.Plugins.Echo.EchoAiToolCatalog()
+        ]);
+        var host = new ChatClientAgentHost(chat, composite, registry, hitl, NullLoggerFactory.Instance, services);
         var conversation = new AgentConversationService(
             host, agentSessions, turn, hitl, policy, NullLogger<AgentConversationService>.Instance);
         var production = new MockProductionOrderClient(store);
@@ -214,5 +221,36 @@ public class PluginModelTests
         Assert.Equal("refund", registry.Primary.Id);
         Assert.Equal(2, registry.Plugins.Count);
         Assert.NotNull(registry.Get("echo"));
+    }
+
+    [Fact]
+    public async Task CompositeCatalog_IncludesEchoAndRefundTools()
+    {
+        TestPaths.EnsureRootEnv();
+        var store = new MemoryRefundDataStore();
+        var confirm = new MemoryConfirmationStore();
+        var idem = new MemoryIdempotencyStore();
+        var policy = new CompositeToolPolicy(
+        [
+            new RefundToolPolicyContribution(),
+            new StayOta.Agent.Plugins.Echo.EchoAgentPlugin().ToolPolicy
+        ]);
+        var gateway = new ToolGateway(store, confirm, idem, policy, NullLogger<ToolGateway>.Instance);
+        var refundCatalog = new RefundAiToolCatalog(gateway, store, policy);
+        var echoCatalog = new StayOta.Agent.Plugins.Echo.EchoAiToolCatalog();
+        var composite = new CompositeAgentToolCatalog([refundCatalog, echoCatalog]);
+
+        Assert.Contains("get_order_detail", composite.Functions.Keys);
+        Assert.Contains("echo_ping", composite.Functions.Keys);
+        Assert.Contains("echo_reflect", composite.Functions.Keys);
+
+        var ping = await echoCatalog.InvokeAsync(new ToolCall(
+            "trc_echo", "echo_ping", ToolAccess.Read, "u", null, null, RiskLevel.L1, "INTENT_READY",
+            new Dictionary<string, object?>()), default);
+        Assert.True(ping.Allowed && ping.Success);
+
+        Assert.Equal("INTENT_READY", policy.StateFor("echo_ping"));
+        Assert.False(policy.IsWrite("echo_ping"));
+        Assert.False(policy.RequiresConfirmation("echo_reflect"));
     }
 }

@@ -14,12 +14,14 @@ namespace StayOta.Agent.Plugins.Refund.Ai;
 public sealed class RefundAiToolCatalog(
     IToolGateway gateway,
     IRefundDataStore store,
-    IToolPolicy toolPolicy) : IAgentToolCatalog
+    IToolPolicy toolPolicy) : IPluginToolCatalog
 {
     private readonly Lazy<Dictionary<string, AIFunction>> _functions =
         new(() => BuildFunctions(gateway, store, toolPolicy));
 
+    public string PluginId => "refund";
     public IReadOnlyDictionary<string, AIFunction> Functions => _functions.Value;
+    public bool OwnsTool(string toolName) => _functions.Value.ContainsKey(toolName);
 
     public IReadOnlyList<AITool> GetAiTools(bool requireApprovalForWrites = true)
     {
