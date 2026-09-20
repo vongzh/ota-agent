@@ -44,4 +44,14 @@ test.describe('StayOTA Agent browser smoke', () => {
     await expect(page.getByRole('heading', { name: 'Agent Sessions' })).toBeVisible()
     await expect(page.getByText('暂无会话（先在处理台跑一轮对话）')).toBeVisible()
   })
+
+  test('ops dashboard loads agent process metrics', async ({ page }) => {
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: '运营看板' })).toBeVisible()
+    await expect(page.getByText('Tool 门禁放行率（Agent 过程指标）')).toBeVisible()
+    await expect(page.getByText('业务侧待接入')).toBeVisible()
+    await expect(page.getByText('活跃 Session')).toBeVisible()
+    await expect(page.getByText('Agent Session')).toBeVisible()
+    await expect(page.getByText('write requires approval')).toBeVisible()
+  })
 })

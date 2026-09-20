@@ -23,6 +23,10 @@ public interface IRefundDataStore
     Task SaveWorkflowRunAsync(WorkflowRun run, CancellationToken ct = default);
     Task SaveToolAuditAsync(ToolAuditLog log, CancellationToken ct = default);
     Task<IReadOnlyList<ToolAuditLog>> QueryToolAuditsAsync(string? traceId, string? caseId, int take = 50, CancellationToken ct = default);
+    /// <summary>Recent tool audits for ops aggregation (no trace/case filter).</summary>
+    Task<IReadOnlyList<ToolAuditLog>> ListRecentToolAuditsAsync(int take = 500, CancellationToken ct = default);
+    Task<IReadOnlyList<WorkflowRun>> ListRecentWorkflowRunsAsync(int take = 200, CancellationToken ct = default);
+    Task<IReadOnlyList<RefundCase>> ListRecentCasesAsync(int take = 200, CancellationToken ct = default);
     IReadOnlyList<ToolContractDto> GetToolContracts();
 }
 

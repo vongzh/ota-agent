@@ -121,6 +121,33 @@ public sealed class RefundDataStore(AppDbContext db) : IRefundDataStore
         return await q.OrderByDescending(a => a.CreatedAt).Take(take).ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<ToolAuditLog>> ListRecentToolAuditsAsync(int take = 500, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 2000);
+        return await db.ToolAudits.AsNoTracking()
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(take)
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<WorkflowRun>> ListRecentWorkflowRunsAsync(int take = 200, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 1000);
+        return await db.WorkflowRuns.AsNoTracking()
+            .OrderByDescending(r => r.StartedAt)
+            .Take(take)
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<RefundCase>> ListRecentCasesAsync(int take = 200, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 1000);
+        return await db.Cases.AsNoTracking()
+            .OrderByDescending(c => c.UpdatedAt)
+            .Take(take)
+            .ToListAsync(ct);
+    }
+
     public IReadOnlyList<ToolContractDto> GetToolContracts()
     {
         LoadContracts();

@@ -138,6 +138,54 @@ export async function installMockApi(page: Page) {
     ]),
   )
 
+  await page.route('**/api/ops/summary', (route) =>
+    json(route, {
+      generatedAt: new Date().toISOString(),
+      source: 'agent-process',
+      northStar: {
+        label: 'Tool 门禁放行率（Agent 过程指标）',
+        value: '95%',
+        note: '基于近 20 条 Tool 审计；非业务退款闭环率',
+        isProcessMetric: true,
+      },
+      businessNorthStar: {
+        label: '正确退款任务闭环率',
+        status: 'pending',
+        note: '业务侧待接入（进线量、真实退款到账等不在本仓聚合）',
+      },
+      metrics: [
+        { group: '会话', name: '活跃 Session', value: '2', note: '来自 IAgentSessionStore', tone: 'ok' },
+        { group: '审批', name: '待审批请求', value: '0', note: 'HITL / FunctionApproval 挂起数', tone: 'ok' },
+        { group: '风险', name: 'Tool 拦截率', value: '5%', note: '1 次拒绝 / 20 次调用', tone: 'warn' },
+        { group: '能力', name: 'Eval 用例', value: '36', note: '离线评测目录规模（本仓可跑）', tone: 'ok' },
+        { group: '编排', name: 'Workflow 成功率', value: '100%', note: '12/12 成功', tone: 'ok' },
+        { group: '插件', name: '已加载插件', value: '2', note: 'refund、echo', tone: 'ok' },
+      ],
+      funnel: [
+        { stage: 'Agent Session', in: 2, drop: 0, note: '会话快照' },
+        { stage: 'Tool 审计', in: 20, drop: 0, note: '含放行与拦截' },
+        { stage: '门禁放行', in: 19, drop: 1, note: 'Allowed=true' },
+        { stage: 'Workflow 落库', in: 12, drop: 7, note: '编排运行记录' },
+        { stage: 'Case 更新', in: 8, drop: 4, note: 'RefundCase 状态' },
+      ],
+      riskItems: [
+        { type: 'write requires approval', count: 1, risk: '高', stage: '发现', owner: 'submit_cancellation' },
+      ],
+      sessions: { total: 2, withPendingApproval: 0, pendingApprovalTotal: 0 },
+      audits: { total: 20, allowed: 19, denied: 1, denyRate: 0.05 },
+      workflows: { total: 12, succeeded: 12, failed: 0, running: 0 },
+      cases: { total: 8, byStatus: { REFUND_INITIATED: 5, OPEN: 3 } },
+      eval: { caseCount: 36 },
+      plugins: {
+        count: 2,
+        items: [
+          { id: 'refund', displayName: 'Refund', isPrimary: true },
+          { id: 'echo', displayName: 'Echo', isPrimary: false },
+        ],
+      },
+    }),
+  )
+
   await page.route('**/api/mcp/tools', (route) =>
     json(route, [{ name: 'echo_ping', source: 'echo', access: 'read', purpose: 'ping' }]),
   )
