@@ -4,8 +4,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Domain.Entities;
+using StayOta.Agent.Abstractions.Tools;
+using StayOta.Agent.Plugins.Refund;
 using StayOta.Agent.Plugins.Refund.Ai;
 using StayOta.Agent.Plugins.Refund.Services;
+using StayOta.Agent.Tools;
 
 namespace StayOta.Agent.Tests;
 
@@ -241,12 +244,15 @@ internal sealed class MemoryRefundDataStore : IRefundDataStore
 
 internal static class GatewayFactory
 {
+    private static readonly IToolPolicy Policy =
+        new CompositeToolPolicy([new RefundToolPolicyContribution()]);
+
     public static (ToolGateway Gateway, MemoryRefundDataStore Store, MemoryConfirmationStore Confirm) Create()
     {
         var store = new MemoryRefundDataStore();
         var confirm = new MemoryConfirmationStore();
         var idem = new MemoryIdempotencyStore();
-        var gateway = new ToolGateway(store, confirm, idem, NullLogger<ToolGateway>.Instance);
+        var gateway = new ToolGateway(store, confirm, idem, Policy, NullLogger<ToolGateway>.Instance);
         return (gateway, store, confirm);
     }
 
@@ -255,8 +261,8 @@ internal static class GatewayFactory
         store ??= new MemoryRefundDataStore();
         var confirm = new MemoryConfirmationStore();
         var idem = new MemoryIdempotencyStore();
-        var gateway = new ToolGateway(store, confirm, idem, NullLogger<ToolGateway>.Instance);
-        var catalog = new RefundAiToolCatalog(gateway, store);
-        return new ScenarioWorkflow(store, catalog, confirm, new Verifier(), NullLogger<ScenarioWorkflow>.Instance);
+        var gateway = new ToolGateway(store, confirm, idem, Policy, NullLogger<ToolGateway>.Instance);
+        var catalog = new RefundAiToolCatalog(gateway, store, Policy);
+        return new ScenarioWorkflow(store, catalog, confirm, Policy, new Verifier(), NullLogger<ScenarioWorkflow>.Instance);
     }
 }

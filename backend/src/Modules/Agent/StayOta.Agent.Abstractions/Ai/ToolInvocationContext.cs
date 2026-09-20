@@ -26,15 +26,19 @@ public sealed class ToolInvocationContext
     public int? ExpectedOrderVersion { get; init; }
     public ToolAccess Access { get; init; } = ToolAccess.Read;
 
+    /// <summary>Plugin-merged tool policy for this turn (set by conversation runtime).</summary>
+    public IToolPolicy? Policy { get; init; }
+
     /// <summary>
-    /// Builds a Gateway call using <see cref="ToolPolicy"/> for access + per-tool conversation state.
+    /// Builds a Gateway call using ambient <see cref="Policy"/> for access + per-tool conversation state.
     /// </summary>
     public ToolCall ToToolCall(string toolName)
     {
-        var access = ToolPolicy.AccessOf(toolName);
-        var state = ToolPolicy.StateFor(toolName, ScenarioId);
+        var policy = Policy ?? NullToolPolicy.Instance;
+        var access = policy.AccessOf(toolName);
+        var state = policy.StateFor(toolName, ScenarioId);
         var idem = IdempotencyKey;
-        if (ToolPolicy.IsWrite(toolName) && string.IsNullOrWhiteSpace(idem))
+        if (policy.IsWrite(toolName) && string.IsNullOrWhiteSpace(idem))
             idem = $"agent-{toolName}-{Guid.NewGuid():N}"[..28];
 
         return new ToolCall(
@@ -49,7 +53,7 @@ public sealed class ToolInvocationContext
         return new Popper(prior);
     }
 
-    public static IDisposable Push(ToolCall call) =>
+    public static IDisposable Push(ToolCall call, IToolPolicy? policy = null) =>
         Push(new ToolInvocationContext
         {
             TraceId = call.TraceId,
@@ -62,11 +66,22 @@ public sealed class ToolInvocationContext
             ConfirmationToken = call.ConfirmationToken,
             IdempotencyKey = call.IdempotencyKey,
             ExpectedOrderVersion = call.ExpectedOrderVersion,
-            Access = call.Access
+            Access = call.Access,
+            Policy = policy
         });
 
     private sealed class Popper(ToolInvocationContext? prior) : IDisposable
     {
         public void Dispose() => CurrentLocal.Value = prior;
     }
+}
+
+/// <summary>Fallback when no plugin policy is on the ambient context (all tools treated as read).</summary>
+file sealed class NullToolPolicy : IToolPolicy
+{
+    public static readonly NullToolPolicy Instance = new();
+    public bool IsWrite(string toolName) => false;
+    public bool RequiresConfirmation(string toolName) => false;
+    public ToolAccess AccessOf(string toolName) => ToolAccess.Read;
+    public string StateFor(string toolName, string? scenarioId = null) => "DECISION_READY";
 }

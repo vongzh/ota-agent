@@ -12,13 +12,14 @@ namespace StayOta.Agent.Plugins.Refund.Services;
 /// <summary>
 /// A–L scenario runner built on Microsoft Agent Framework <see cref="WorkflowBuilder"/> /
 /// <see cref="InProcessExecution"/> instead of a hand-rolled FSM loop.
-/// Tool gates remain in <see cref="IToolGateway"/> via <see cref="IRefundAiToolCatalog"/>.
-/// Write/confirm/state classification comes from <see cref="ToolPolicy"/>.
+/// Tool gates remain in <see cref="IToolGateway"/> via <see cref="IAgentToolCatalog"/>.
+/// Write/confirm/state classification comes from plugin-contributed <see cref="IToolPolicy"/>.
 /// </summary>
 public sealed class ScenarioWorkflow(
     IRefundDataStore store,
-    IRefundAiToolCatalog tools,
+    IAgentToolCatalog tools,
     IConfirmationStore confirmationStore,
+    IToolPolicy toolPolicy,
     IVerifier verifier,
     ILogger<ScenarioWorkflow> logger) : IScenarioWorkflow
 {
@@ -135,13 +136,13 @@ public sealed class ScenarioWorkflow(
 
     private async Task ExecuteToolStepAsync(ScenarioRunBag s, string toolName, int occurrence, CancellationToken ct)
     {
-        var desired = ToolPolicy.StateFor(toolName, s.ScenarioId);
+        var desired = toolPolicy.StateFor(toolName, s.ScenarioId);
         if (s.State != desired)
             s.State = Record(s.Steps, "WORKFLOW_ROUTE", "AGENT_FRAMEWORK", s.State, desired, null, new { next_tool = toolName });
 
         var args = BuildArgs(toolName, s.ScenarioId, s.Scenario, s.Order, s.Facts, s.TraceId, occurrence);
         string? token = null;
-        if (ToolPolicy.RequiresConfirmation(toolName))
+        if (toolPolicy.RequiresConfirmation(toolName))
         {
             token = await confirmationStore.IssueAsync(
                 s.Scenario.CaseId, s.Order.OrderId, s.Order.Version, toolName, TimeSpan.FromMinutes(10), ct);
@@ -149,7 +150,7 @@ public sealed class ScenarioWorkflow(
         }
 
         var result = await tools.InvokeAsync(new ToolCall(
-            s.TraceId, toolName, ToolPolicy.AccessOf(toolName), s.Scenario.UserId, s.Order.OrderId, s.Scenario.CaseId, s.Risk,
+            s.TraceId, toolName, toolPolicy.AccessOf(toolName), s.Scenario.UserId, s.Order.OrderId, s.Scenario.CaseId, s.Risk,
             s.State, args, token, Convert.ToString(args.GetValueOrDefault("idempotency_key")),
             s.Order.Version), ct);
 

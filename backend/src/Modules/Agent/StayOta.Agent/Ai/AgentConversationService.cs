@@ -10,13 +10,18 @@ using StayOta.Agent.Abstractions.Tools;
 namespace StayOta.Agent.Ai;
 
 public sealed class AgentConversationService(
-    IRefundAgentHost agentHost,
+    IAgentHost agentHost,
     IAgentSessionStore sessionStore,
     DeterministicTurnContext turnContext,
+    TurnHitlOptions hitlOptions,
+    IToolPolicy toolPolicy,
     ILogger<AgentConversationService> logger) : IAgentConversationService
 {
     public async Task<AgentTurnResult> RunTurnAsync(AgentTurnRequest request, CancellationToken ct = default)
     {
+        // Drive ApprovalRequired wrapping before ChatClientAgentHost lazily builds Agent.
+        hitlOptions.RequireFunctionApproval = request.RequireWriteApproval;
+
         using var _ = ToolInvocationContext.Push(new ToolInvocationContext
         {
             TraceId = request.TraceId,
@@ -30,12 +35,14 @@ public sealed class AgentConversationService(
             ConfirmationToken = request.ConfirmationToken,
             IdempotencyKey = request.IdempotencyKey,
             ExpectedOrderVersion = request.ExpectedOrderVersion,
-            Access = ToolAccess.Read
+            Access = ToolAccess.Read,
+            Policy = toolPolicy
         });
 
-        // Confirm-required writes never auto-hint — HITL via ApprovalRequired or post-confirm Gateway call.
+        // When RequireWriteApproval: strip confirm tools (HITL via PreferredWriteTool).
+        // When user already confirmed: keep confirm tools in hints so Agent→Gateway executes them.
         var hints = request.HintTools
-            .Where(t => !ToolPolicy.RequiresConfirmation(t))
+            .Where(t => !request.RequireWriteApproval || !toolPolicy.RequiresConfirmation(t))
             .Where(t => !request.RequireWriteApproval || t != request.WriteToolName)
             .Distinct(StringComparer.Ordinal)
             .ToList();
@@ -143,6 +150,8 @@ public sealed class AgentConversationService(
         var pending = snapshot.PendingApprovals.FirstOrDefault(p => p.RequestId == request.RequestId)
                       ?? throw new InvalidOperationException($"approval request {request.RequestId} not found");
 
+        hitlOptions.RequireFunctionApproval = true;
+
         using var _ = ToolInvocationContext.Push(new ToolInvocationContext
         {
             TraceId = snapshot.TraceId,
@@ -156,7 +165,8 @@ public sealed class AgentConversationService(
             ConfirmationToken = snapshot.ConfirmationToken,
             IdempotencyKey = snapshot.IdempotencyKey,
             ExpectedOrderVersion = snapshot.ExpectedOrderVersion,
-            Access = ToolAccess.Write
+            Access = ToolAccess.Write,
+            Policy = toolPolicy
         });
 
         var session = await agentHost.Agent.DeserializeSessionAsync(

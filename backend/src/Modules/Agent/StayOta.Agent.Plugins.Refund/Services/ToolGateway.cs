@@ -6,6 +6,7 @@ using StayOta.Agent.Abstractions.Domain.Entities;
 using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Refund.Services;
+// IToolPolicy injected — plugin contributions, not static ToolPolicy.
 
 public interface IRefundDataStore
 {
@@ -37,6 +38,7 @@ public sealed class ToolGateway(
     IRefundDataStore store,
     IConfirmationStore confirmationStore,
     IIdempotencyStore idempotencyStore,
+    IToolPolicy toolPolicy,
     ILogger<ToolGateway> logger) : IToolGateway
 {
     public IReadOnlyList<ToolContractDto> ListContracts() => store.GetToolContracts();
@@ -59,12 +61,12 @@ public sealed class ToolGateway(
                 $"tool {call.ToolName} not allowed in state {call.ConversationState}", ct);
         }
 
-        var isWrite = ToolPolicy.IsWrite(call.ToolName);
+        var isWrite = toolPolicy.IsWrite(call.ToolName);
 
         if (isWrite && call.RiskLevel == RiskLevel.L3 && call.ToolName is "submit_cancellation" or "submit_order_change")
             return await Audit(call, false, false, null, "L3 blocks auto financial write; escalate", ct);
 
-        if (isWrite && ToolPolicy.RequiresConfirmation(call.ToolName))
+        if (isWrite && toolPolicy.RequiresConfirmation(call.ToolName))
         {
             if (string.IsNullOrWhiteSpace(call.ConfirmationToken) || call.ExpectedOrderVersion is null ||
                 string.IsNullOrWhiteSpace(call.OrderId) || string.IsNullOrWhiteSpace(call.CaseId))

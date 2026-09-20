@@ -7,13 +7,17 @@ using StayOta.Agent.Plugins.Refund.Services;
 namespace StayOta.Agent.Plugins.Refund.Ai;
 
 /// <summary>
-/// Exposes the 33 domain tools as MEAI <see cref="AIFunction"/>s.
-/// Confirm-required writes are wrapped with <see cref="ApprovalRequiredAIFunction"/> for ChatClientAgent HITL.
-/// Domain gates remain in <see cref="IToolGateway"/>; denials may one-shot replan via <see cref="ToolFailureReplanner"/>.
+/// Exposes domain tools as MEAI <see cref="AIFunction"/>s.
+/// Confirm-required writes wrap with <see cref="ApprovalRequiredAIFunction"/> when requested.
+/// Policy comes from injected <see cref="IToolPolicy"/> (plugin contributions).
 /// </summary>
-public sealed class RefundAiToolCatalog(IToolGateway gateway, IRefundDataStore store) : IRefundAiToolCatalog
+public sealed class RefundAiToolCatalog(
+    IToolGateway gateway,
+    IRefundDataStore store,
+    IToolPolicy toolPolicy) : IAgentToolCatalog
 {
-    private readonly Lazy<Dictionary<string, AIFunction>> _functions = new(() => BuildFunctions(gateway, store));
+    private readonly Lazy<Dictionary<string, AIFunction>> _functions =
+        new(() => BuildFunctions(gateway, store, toolPolicy));
 
     public IReadOnlyDictionary<string, AIFunction> Functions => _functions.Value;
 
@@ -23,18 +27,19 @@ public sealed class RefundAiToolCatalog(IToolGateway gateway, IRefundDataStore s
             return _functions.Value.Values.Cast<AITool>().ToList();
 
         return _functions.Value.Select(kv =>
-            ToolPolicy.RequiresConfirmation(kv.Key)
+            toolPolicy.RequiresConfirmation(kv.Key)
                 ? (AITool)new ApprovalRequiredAIFunction(kv.Value)
                 : kv.Value).ToList();
     }
 
     public Task<ToolResult> InvokeAsync(ToolCall call, CancellationToken ct = default)
     {
-        using var _ = ToolInvocationContext.Push(call);
+        using var _ = ToolInvocationContext.Push(call, toolPolicy);
         return gateway.InvokeAsync(call, ct);
     }
 
-    private static Dictionary<string, AIFunction> BuildFunctions(IToolGateway gateway, IRefundDataStore store)
+    private static Dictionary<string, AIFunction> BuildFunctions(
+        IToolGateway gateway, IRefundDataStore store, IToolPolicy policy)
     {
         var map = new Dictionary<string, AIFunction>(StringComparer.Ordinal);
         foreach (var contract in store.GetToolContracts())
@@ -61,21 +66,20 @@ public sealed class RefundAiToolCatalog(IToolGateway gateway, IRefundDataStore s
 
                     foreach (var suggestion in suggestions.Take(2))
                     {
-                        // Never auto-escalate into confirm-required writes without HITL.
-                        if (ToolPolicy.RequiresConfirmation(suggestion.ToolName))
+                        if (policy.RequiresConfirmation(suggestion.ToolName))
                             continue;
 
                         var retry = ambient.ToToolCall(suggestion.ToolName) with
                         {
                             ConversationState = suggestion.ConversationState,
                             Arguments = merged,
-                            ConfirmationToken = ToolPolicy.IsWrite(suggestion.ToolName)
+                            ConfirmationToken = policy.IsWrite(suggestion.ToolName)
                                 ? ambient.ConfirmationToken
                                 : null,
-                            IdempotencyKey = ToolPolicy.IsWrite(suggestion.ToolName)
+                            IdempotencyKey = policy.IsWrite(suggestion.ToolName)
                                 ? (ambient.IdempotencyKey ?? $"replan-{suggestion.ToolName}-{Guid.NewGuid():N}"[..28])
                                 : null,
-                            ExpectedOrderVersion = ToolPolicy.IsWrite(suggestion.ToolName)
+                            ExpectedOrderVersion = policy.IsWrite(suggestion.ToolName)
                                 ? ambient.ExpectedOrderVersion
                                 : null
                         };

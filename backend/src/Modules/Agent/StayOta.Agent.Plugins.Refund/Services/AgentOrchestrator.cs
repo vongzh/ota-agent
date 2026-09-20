@@ -18,14 +18,14 @@ public sealed class AgentOrchestrator(
     IIntentService intentService,
     IPolicyRetrieval retrieval,
     IRulesEngine rules,
-    IRefundAiToolCatalog tools,
-    IRefundAgentHost agentHost,
+    IAgentHost agentHost,
     IAgentConversationService conversation,
     IAgentSessionStore agentSessionStore,
     IConfirmationStore confirmationStore,
     ISessionStore sessionStore,
     IVerifier verifier,
     IProductionOrderClient production,
+    IToolPolicy toolPolicy,
     Microsoft.Extensions.Options.IOptions<HostingOptions> hostingOptions,
     ILogger<AgentOrchestrator> logger) : IAgentOrchestrator
 {
@@ -88,9 +88,11 @@ public sealed class AgentOrchestrator(
                 TimeSpan.FromMinutes(10), ct);
         }
 
-        // Soft hints only — Agent executes via Gateway. Confirm-required writes stay on HITL.
+        // Soft hints — Agent executes via Gateway (sole surface).
+        // ConfirmWrite: include confirm tools so Agent runs them with ambient token (no Orchestrator bypass).
+        // Else: strip confirm tools; PreferredWriteTool triggers FunctionApproval.
         var hintTools = requiredTools
-            .Where(t => !ToolPolicy.RequiresConfirmation(t))
+            .Where(t => request.ConfirmWrite || !toolPolicy.RequiresConfirmation(t))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -163,28 +165,6 @@ public sealed class AgentOrchestrator(
                 : $"provider={agentHost.ProviderName}, tools={string.Join(',', agentTurn.ToolsInvoked)}, session={agentTurn.SessionId}"));
 
         var executed = agentTurn.ToolsInvoked.ToList();
-
-        // Confirmed write completes via Gateway only (no Orchestrator tool pre-loop).
-        if (request.ConfirmWrite && confirmationToken is not null && decision.NeedsUserConfirm)
-        {
-            var writeCall = new ToolCall(
-                traceId, writeToolName, ToolAccess.Write, userId, order.OrderId, scenario.CaseId,
-                decision.RiskLevel, ToolPolicy.StateFor(writeToolName, scenario.ScenarioId),
-                ambient,
-                request.ConfirmationToken ?? confirmationToken,
-                request.IdempotencyKey ?? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}",
-                order.Version);
-            var writeResult = await tools.InvokeAsync(writeCall, ct);
-            if (writeResult.Allowed && writeResult.Success)
-            {
-                if (!executed.Contains(writeToolName)) executed.Add(writeToolName);
-                steps.Add(new("确认写操作", "success", writeToolName));
-            }
-            else
-            {
-                steps.Add(new("确认写操作", "error", writeResult.DenyReason ?? writeToolName));
-            }
-        }
 
         var pendingApprovals = agentTurn.PendingApprovals
             .Select(p => new PendingApprovalDto(p.RequestId, p.CallId, p.ToolName, p.Arguments, p.Description))

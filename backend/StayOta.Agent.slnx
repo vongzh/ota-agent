@@ -3,6 +3,7 @@
     <Project Path="src/Modules/Agent/StayOta.Agent.Abstractions/StayOta.Agent.Abstractions.csproj" />
     <Project Path="src/Modules/Agent/StayOta.Agent/StayOta.Agent.csproj" />
     <Project Path="src/Modules/Agent/StayOta.Agent.Plugins.Refund/StayOta.Agent.Plugins.Refund.csproj" />
+    <Project Path="src/Modules/Agent/StayOta.Agent.Plugins.Echo/StayOta.Agent.Plugins.Echo.csproj" />
   </Folder>
   <Folder Name="/src/Hosts/">
     <Project Path="src/Hosts/StayOta.Agent.Host/StayOta.Agent.Host.csproj" />

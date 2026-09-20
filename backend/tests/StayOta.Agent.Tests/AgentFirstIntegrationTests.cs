@@ -5,10 +5,14 @@ using Microsoft.Extensions.Options;
 using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Options;
+using StayOta.Agent.Abstractions.Plugins;
 using StayOta.Agent.Ai;
+using StayOta.Agent.Plugins;
+using StayOta.Agent.Plugins.Refund;
 using StayOta.Agent.Plugins.Refund.Ai;
 using StayOta.Agent.Plugins.Refund.Production;
 using StayOta.Agent.Plugins.Refund.Services;
+using StayOta.Agent.Tools;
 using Xunit;
 
 namespace StayOta.Agent.Tests;
@@ -54,15 +58,19 @@ public class AgentFirstIntegrationTests
         store = new MemoryRefundDataStore();
         var confirm = new MemoryConfirmationStore();
         var idem = new MemoryIdempotencyStore();
-        var gateway = new ToolGateway(store, confirm, idem, NullLogger<ToolGateway>.Instance);
-        var catalog = new RefundAiToolCatalog(gateway, store);
+        var policy = new CompositeToolPolicy([new RefundToolPolicyContribution()]);
+        var gateway = new ToolGateway(store, confirm, idem, policy, NullLogger<ToolGateway>.Instance);
+        var catalog = new RefundAiToolCatalog(gateway, store, policy);
         agentSessions = new MemoryAgentSessionStore();
         var turn = new DeterministicTurnContext();
+        var hitl = new TurnHitlOptions();
         var chat = new DeterministicRefundChatClient(turn);
+        var plugin = new RefundAgentPlugin();
+        var registry = new AgentPluginRegistry([plugin]);
         var services = new ServiceCollection().BuildServiceProvider();
-        var host = new RefundAgentHost(chat, catalog, NullLoggerFactory.Instance, services);
+        var host = new ChatClientAgentHost(chat, catalog, registry, hitl, NullLoggerFactory.Instance, services);
         var conversation = new AgentConversationService(
-            host, agentSessions, turn, NullLogger<AgentConversationService>.Instance);
+            host, agentSessions, turn, hitl, policy, NullLogger<AgentConversationService>.Instance);
         var production = new MockProductionOrderClient(store);
         var hosting = Options.Create(new HostingOptions { DemoEnabled = true });
 
@@ -79,6 +87,7 @@ public class AgentFirstIntegrationTests
             new MemorySessionStore(),
             new Verifier(),
             production,
+            policy,
             hosting,
             NullLogger<AgentOrchestrator>.Instance);
     }
@@ -139,5 +148,34 @@ public class AgentFirstIntegrationTests
         Assert.Contains(events, e => e.Type == "status" && e.Text == "agent_completed");
         Assert.Contains(events, e => e.Type == "tool");
         Assert.Contains(events, e => e.Type == "done");
+    }
+
+    [Fact]
+    public async Task ConfirmWrite_ExecutesWriteViaAgentWithoutOrchestratorBypass()
+    {
+        var orch = CreateOrchestrator(out _, out _);
+        var decision = await orch.HandleAsync(new AgentMessageRequest(
+            "帮我把明天去杭州的酒店免费取消。",
+            ScenarioId: "A",
+            ConfirmWrite: true));
+
+        Assert.True(decision.AgentDriven);
+        Assert.False(decision.HasPendingApprovals);
+        Assert.Contains("submit_cancellation", decision.ToolSequence);
+        Assert.DoesNotContain(decision.Steps, s => s.Step == "确认写操作");
+    }
+}
+
+public class PluginModelTests
+{
+    [Fact]
+    public void Registry_ListsRefundAndEcho()
+    {
+        var refund = new RefundAgentPlugin();
+        var echo = new StayOta.Agent.Plugins.Echo.EchoAgentPlugin();
+        var registry = new AgentPluginRegistry([refund, echo]);
+        Assert.Equal("refund", registry.Primary.Id);
+        Assert.Equal(2, registry.Plugins.Count);
+        Assert.NotNull(registry.Get("echo"));
     }
 }

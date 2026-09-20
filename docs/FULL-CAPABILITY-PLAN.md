@@ -20,6 +20,7 @@
 | FunctionApproval HITL | ✅ `ApprovalRequiredAIFunction` + `/api/agent/approvals` |
 | MCP `/mcp` | ✅ `RefundMcpTools` |
 | Production Mock\|Http\|Mcp | ✅ 客户端已注册（Demo 默认 Mock） |
+| **插件模型 `IAgentPlugin`** | ✅ `AddAgentPlugin<T>`；Refund + Echo stub；`ToolPolicy` 插件贡献 |
 | 官方 Vben monorepo | 🔜 本仓为 Ant Design Vue Demo 壳 |
 
 ## 已落地改造
