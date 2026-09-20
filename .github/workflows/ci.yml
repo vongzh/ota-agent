@@ -19,6 +19,22 @@ jobs:
         env:
           STAYOTA_AGENT_ROOT: ${{ github.workspace }}
 
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Pack Abstractions + Agent + Echo
+        run: bash scripts/pack.sh
+      - name: Verify nupkgs
+        run: |
+          test -f artifacts/nuget/StayOta.Agent.Abstractions.0.1.0.nupkg
+          test -f artifacts/nuget/StayOta.Agent.0.1.0.nupkg
+          test -f artifacts/nuget/StayOta.Agent.Plugins.Echo.0.1.0.nupkg
+          ls -la artifacts/nuget/*.nupkg
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

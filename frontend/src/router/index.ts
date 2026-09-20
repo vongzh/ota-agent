@@ -27,6 +27,12 @@ const router = createRouter({
           component: () => import('@/views/dashboard/index.vue'),
           meta: { title: '运营看板' },
         },
+        {
+          path: 'console',
+          name: 'Console',
+          component: () => import('@/views/console/index.vue'),
+          meta: { title: '框架调试台' },
+        },
       ],
     },
   ],

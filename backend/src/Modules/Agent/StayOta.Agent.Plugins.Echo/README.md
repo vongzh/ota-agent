@@ -6,10 +6,10 @@ Implement `StayOta.Agent.Abstractions.Plugins.IAgentPlugin`:
 
 | Member | Purpose |
 | --- | --- |
-| `Id` / `DisplayName` | Registry identity (shown on `/health`) |
+| `Id` / `DisplayName` | Registry identity (shown on `/health`, `/api/plugins`) |
 | `ToolPolicy` | `IToolPolicyContribution` — write/confirm/state tables for **your** tools only |
 | `AgentInstructions` / `AgentName` | Used when your plugin is **primary** (first registered) |
-| `ConfigureServices` | Register gateway, catalog (`IAgentToolCatalog`), orchestrator, MCP, eval, EF, … |
+| `ConfigureServices` | Register `IPluginToolCatalog`, optional MCP/Eval/EF |
 
 ## Host wiring
 
@@ -19,17 +19,19 @@ builder.Services.AddAgentPlugin<RefundAgentPlugin>(builder.Configuration); // pr
 builder.Services.AddAgentPlugin<EchoAgentPlugin>(builder.Configuration);   // sample
 ```
 
-`CompositeToolPolicy` merges all contributions. `ChatClientAgentHost` reads the **primary** plugin for instructions.
+`CompositeToolPolicy` merges all contributions. `CompositeAgentToolCatalog` merges all `IPluginToolCatalog`s. `ChatClientAgentHost` reads the **primary** plugin for instructions.
 
 ## Samples in this repo
 
-| Plugin | Path |
-| --- | --- |
-| Refund (full vertical) | `StayOta.Agent.Plugins.Refund/RefundAgentPlugin.cs` |
-| Echo (stub) | `StayOta.Agent.Plugins.Echo/EchoAgentPlugin.cs` |
+| Plugin | Path | Tools |
+| --- | --- | --- |
+| Refund (full vertical) | `StayOta.Agent.Plugins.Refund/` | 33 refund tools via Gateway |
+| Echo (runnable sample) | `EchoAgentPlugin.cs` | `echo_ping`, `echo_reflect` (+ MCP) |
+
+Pack: `bash scripts/pack.sh` — see root `docs/PLUGIN-AUTHORING.md`.
 
 ## Rules of thumb
 
 1. Do **not** put tool name lists in Abstractions — contribute via `ToolPolicy`.
-2. Tool execution must go **Agent → `IAgentToolCatalog` → `IToolGateway`** (no orchestrator bypass).
-3. Confirm-required writes: either FunctionApproval (`RequireWriteApproval`) or ambient confirmation token with `RequireFunctionApproval=false` on the turn.
+2. Tool execution must go **Agent → composite catalog → plugin catalog / Gateway** (no orchestrator bypass).
+3. Writes that need HITL: FunctionApproval is the sole user-facing approval surface.

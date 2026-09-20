@@ -133,3 +133,89 @@ export async function health() {
   const { data } = await http.get('/health')
   return data
 }
+
+export type AgentSessionSummary = {
+  sessionId: string
+  traceId: string
+  userId: string
+  orderId: string
+  caseId: string
+  scenarioId: string
+  pendingApprovalCount: number
+  updatedAt?: string
+}
+
+export type ToolAuditRow = {
+  id: number
+  traceId: string
+  caseId?: string | null
+  toolName: string
+  access: string
+  allowed: boolean
+  denyReason?: string | null
+  createdAt: string
+}
+
+export async function listSessions(take = 50) {
+  const { data } = await http.get<AgentSessionSummary[]>('/api/agent/sessions', { params: { take } })
+  return data
+}
+
+export async function getSession(sessionId: string) {
+  const { data } = await http.get(`/api/agent/sessions/${encodeURIComponent(sessionId)}`)
+  return data
+}
+
+export async function deleteSession(sessionId: string) {
+  await http.delete(`/api/agent/sessions/${encodeURIComponent(sessionId)}`)
+}
+
+export async function queryAudits(params: { traceId?: string; caseId?: string; take?: number }) {
+  const { data } = await http.get<ToolAuditRow[]>('/api/agent/audits', { params })
+  return data
+}
+
+export async function listPlugins() {
+  const { data } = await http.get('/api/plugins')
+  return data as Array<{ id: string; displayName: string; agentName: string; isPrimary: boolean }>
+}
+
+export async function listMcpTools() {
+  const { data } = await http.get('/api/mcp/tools')
+  return data as Array<{ name: string; source: string; access: string; purpose?: string }>
+}
+
+export async function invokeTool(payload: {
+  toolName: string
+  arguments?: Record<string, unknown>
+  userId?: string
+  conversationState?: string
+}) {
+  const { data } = await http.post('/api/tools/invoke', payload)
+  return data as {
+    allowed?: boolean
+    success?: boolean
+    toolName?: string
+    denyReason?: string
+    data?: unknown
+    error?: string
+  }
+}
+
+export async function getAiProvider() {
+  const { data } = await http.get('/api/ai/provider')
+  return data as {
+    configuredProvider: string
+    configuredModel?: string
+    runtimeProvider?: string | null
+    runtimeModel?: string | null
+    effectiveProvider: string
+    effectiveModel?: string
+    allowed: string[]
+  }
+}
+
+export async function setAiProvider(provider: string, model?: string) {
+  const { data } = await http.post('/api/ai/provider', { provider, model })
+  return data
+}

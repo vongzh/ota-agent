@@ -44,6 +44,7 @@ const nav = [
   { path: '/design', label: 'Agent 设计' },
   { path: '/workspace', label: '智能处理台' },
   { path: '/dashboard', label: '运营看板' },
+  { path: '/console', label: '框架调试台' },
 ]
 
 onMounted(async () => {

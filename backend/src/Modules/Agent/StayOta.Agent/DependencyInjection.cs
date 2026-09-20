@@ -80,6 +80,8 @@ public static class StayOtaAgentServiceCollectionExtensions
 
         services.AddScoped<IAgentHost, ChatClientAgentHost>();
         services.AddScoped<IAgentConversationService, AgentConversationService>();
+        services.AddScoped<IAgentToolCatalog, CompositeAgentToolCatalog>();
+        services.AddSingleton<RuntimeAiOptions>();
 
         return services;
     }
