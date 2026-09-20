@@ -290,6 +290,9 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
                     b.Property<bool>("Allowed")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("CaseId")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -313,6 +316,10 @@ namespace StayOta.Agent.Plugins.Refund.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CaseId");
+
+                    b.HasIndex("TraceId");
 
                     b.ToTable("tool_audits", "agent_refund");
                 });

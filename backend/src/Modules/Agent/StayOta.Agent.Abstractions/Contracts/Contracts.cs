@@ -36,7 +36,30 @@ public sealed record HitlStateDto(
     bool RequiresConfirmation,
     string? PendingAction,
     string? ConfirmationToken,
-    string Gate = "confirmation_token + expected_order_version + idempotency_key");
+    /// <summary>Unified HITL gate: FunctionApproval is the sole user-facing approval surface; confirmation_token remains the Gateway write credential.</summary>
+    string Gate = "FunctionApproval + confirmation_token + expected_order_version + idempotency");
+
+public sealed record ToolAuditDto(
+    long Id,
+    string TraceId,
+    string? CaseId,
+    string ToolName,
+    string Access,
+    bool Allowed,
+    string? DenyReason,
+    DateTimeOffset CreatedAt);
+
+public sealed record AgentSessionDetailDto(
+    string SessionId,
+    string TraceId,
+    string UserId,
+    string OrderId,
+    string CaseId,
+    string ScenarioId,
+    string ConversationState,
+    int PendingApprovalCount,
+    IReadOnlyList<PendingApprovalDto> PendingApprovals,
+    DateTimeOffset? UpdatedAt);
 
 public sealed record PendingApprovalDto(
     string RequestId,

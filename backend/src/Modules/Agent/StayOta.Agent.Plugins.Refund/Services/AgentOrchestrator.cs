@@ -31,10 +31,21 @@ public sealed class AgentOrchestrator(
 {
     private readonly ScenarioRouter _router = new();
 
-    public async Task<AgentDecisionDto> HandleAsync(AgentMessageRequest request, CancellationToken ct = default)
+    public Task<AgentDecisionDto> HandleAsync(AgentMessageRequest request, CancellationToken ct = default) =>
+        HandleCoreAsync(request, progress: null, ct);
+
+    private async Task<AgentDecisionDto> HandleCoreAsync(
+        AgentMessageRequest request,
+        IProgress<AgentStreamEvent>? progress,
+        CancellationToken ct)
     {
+        void Emit(AgentStreamEvent ev) => progress?.Report(ev);
+
         if (request.ServiceError)
             throw new InvalidOperationException("模拟订单服务响应超时");
+
+        Emit(new AgentStreamEvent("status", "started"));
+        Emit(new AgentStreamEvent("status", "assembling_context"));
 
         var hosting = hostingOptions.Value;
         if (request.ResetDemo)
@@ -60,24 +71,33 @@ public sealed class AgentOrchestrator(
 
         var analyzed = intentService.Analyze(request.Message, scenario, request.LowConfidence);
         steps.Add(new("意图识别", analyzed.Confidence < 0.5 ? "warning" : "success", analyzed.Intent, analyzed.Confidence));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         if (request.HasEvidence) analyzed.Slots["evidence"] = "uploaded";
         if (request.HasNegotiationReason) analyzed.Slots["negotiation_reason"] = "provided";
         var missing = (signals.HasEvidence || !NeedsEvidence(scenario.ScenarioId, signals)) ? 0 : 1;
         steps.Add(new("槽位提取", missing > 0 ? "warning" : "success", missing > 0 ? $"缺失 {missing} 项" : "槽位完整"));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         steps.Add(new("订单查询", "success", $"status={order.Status}, on_site={order.UserOnSite}, source={production.Mode}"));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         var matches = retrieval.Retrieve(order, policy, analyzed.Reason);
         steps.Add(new("政策检索", "success", $"{matches[0].PolicyId} · score={matches[0].Score:0.00}"));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         var decision = rules.Evaluate(order, policy, scenario, signals);
         steps.Add(new("规则校验", decision.NeedsEvidence ? "warning" : "success", decision.RuleCode));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
         steps.Add(new("风险判断", "success", $"{decision.RiskLevel} · {decision.RiskScore}"));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         var requiredTools = JsonSerializer.Deserialize<List<string>>(scenario.RequiredToolsJson) ?? [];
         var writeToolName = scenario.ScenarioId == "I" ? "submit_order_change" : "submit_cancellation";
-        var deferWriteToFunctionApproval = decision.NeedsUserConfirm && !request.ConfirmWrite;
+
+        // Unified HITL: NeedsUserConfirm always goes through FunctionApproval.
+        // ConfirmWrite = convenience auto-approve of the first pending approval (still Agent→Gateway).
+        var requireFunctionApproval = decision.NeedsUserConfirm;
 
         string? confirmationToken = null;
         if (decision.NeedsUserConfirm)
@@ -88,15 +108,14 @@ public sealed class AgentOrchestrator(
                 TimeSpan.FromMinutes(10), ct);
         }
 
-        // Soft hints — Agent executes via Gateway (sole surface).
-        // ConfirmWrite: include confirm tools so Agent runs them with ambient token (no Orchestrator bypass).
-        // Else: strip confirm tools; PreferredWriteTool triggers FunctionApproval.
+        // Soft hints — strip confirm tools; PreferredWriteTool triggers FunctionApproval.
         var hintTools = requiredTools
-            .Where(t => request.ConfirmWrite || !toolPolicy.RequiresConfirmation(t))
+            .Where(t => !requireFunctionApproval || !toolPolicy.RequiresConfirmation(t))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
         steps.Add(new("处理动作", "active", decision.Action));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         TicketDto? ticket = null;
         if (decision.Action is "HumanHandoff" or "NegotiateWithHotel" or "Recovery" or "FinanceReview" or "SpecialReview" or "ServiceDispute")
@@ -122,9 +141,7 @@ public sealed class AgentOrchestrator(
                 true,
                 writeToolName,
                 confirmationToken,
-                deferWriteToFunctionApproval
-                    ? "FunctionApproval (ToolApprovalRequestContent) + confirmation_token + version + idempotency"
-                    : "confirmation_token + expected_order_version + idempotency_key");
+                "FunctionApproval + confirmation_token + expected_order_version + idempotency");
         }
 
         var suggestedReply = BuildReply(decision, order);
@@ -137,25 +154,64 @@ public sealed class AgentOrchestrator(
             ["action"] = decision.Action
         };
 
-        var agentTurn = await conversation.RunTurnAsync(new AgentTurnRequest(
-            request.Message,
-            traceId,
-            userId,
-            order.OrderId,
-            scenario.CaseId,
-            scenario.ScenarioId,
-            decision.RiskLevel,
-            decision.ConversationState,
-            hintTools,
-            suggestedReply,
-            deferWriteToFunctionApproval,
-            deferWriteToFunctionApproval ? writeToolName : null,
-            ambient,
-            confirmationToken,
-            request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
-            decision.NeedsUserConfirm ? order.Version : null,
-            request.AgentSessionId,
-            AllowAutonomousToolSelection: hintTools.Count == 0), ct);
+        var turnProgress = progress is null
+            ? null
+            : new Progress<AgentStreamEvent>(ev =>
+            {
+                // Avoid duplicating terminal events that HandleCore emits itself.
+                if (ev.Type is "done" or "error") return;
+                progress.Report(ev);
+            });
+
+        var agentTurn = turnProgress is null
+            ? await conversation.RunTurnAsync(new AgentTurnRequest(
+                request.Message,
+                traceId,
+                userId,
+                order.OrderId,
+                scenario.CaseId,
+                scenario.ScenarioId,
+                decision.RiskLevel,
+                decision.ConversationState,
+                hintTools,
+                suggestedReply,
+                requireFunctionApproval,
+                requireFunctionApproval ? writeToolName : null,
+                ambient,
+                confirmationToken,
+                request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
+                decision.NeedsUserConfirm ? order.Version : null,
+                request.AgentSessionId,
+                AllowAutonomousToolSelection: hintTools.Count == 0), ct)
+            : await conversation.RunTurnAsync(new AgentTurnRequest(
+                request.Message,
+                traceId,
+                userId,
+                order.OrderId,
+                scenario.CaseId,
+                scenario.ScenarioId,
+                decision.RiskLevel,
+                decision.ConversationState,
+                hintTools,
+                suggestedReply,
+                requireFunctionApproval,
+                requireFunctionApproval ? writeToolName : null,
+                ambient,
+                confirmationToken,
+                request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
+                decision.NeedsUserConfirm ? order.Version : null,
+                request.AgentSessionId,
+                AllowAutonomousToolSelection: hintTools.Count == 0), turnProgress, ct);
+
+        // ConfirmWrite: auto-approve first pending via the unified approvals path (no Orchestrator tool bypass).
+        if (request.ConfirmWrite && agentTurn.HasPendingApprovals && agentTurn.PendingApprovals.Count > 0)
+        {
+            var first = agentTurn.PendingApprovals[0];
+            Emit(new AgentStreamEvent("status", "auto_approving", new { first.RequestId, first.ToolName }));
+            return await RespondToApprovalAsync(
+                new FunctionApprovalRequest(agentTurn.SessionId, first.RequestId, true, "ConfirmWrite auto-approved via FunctionApproval"),
+                ct);
+        }
 
         steps.Add(new(
             "Agent 驱动",
@@ -163,6 +219,7 @@ public sealed class AgentOrchestrator(
             agentTurn.HasPendingApprovals
                 ? $"FunctionApproval 待批 ×{agentTurn.PendingApprovals.Count}; session={agentTurn.SessionId}"
                 : $"provider={agentHost.ProviderName}, tools={string.Join(',', agentTurn.ToolsInvoked)}, session={agentTurn.SessionId}"));
+        Emit(new AgentStreamEvent("step", steps[^1].Step, steps[^1]));
 
         var executed = agentTurn.ToolsInvoked.ToList();
 
@@ -333,7 +390,7 @@ public sealed class AgentOrchestrator(
             false, Array.Empty<string>(),
             pending.Count > 0
                 ? new HitlStateDto(true, pending[0].ToolName, snapshot.ConfirmationToken,
-                    "FunctionApproval (ToolApprovalRequestContent)")
+                    "FunctionApproval + confirmation_token + expected_order_version + idempotency")
                 : null,
             agentHost.ProviderName,
             agentTurn.SessionId,
@@ -371,56 +428,42 @@ public sealed class AgentOrchestrator(
         AgentMessageRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        yield return new AgentStreamEvent("status", "started");
-        yield return new AgentStreamEvent("status", "assembling_context");
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<AgentStreamEvent>(
+            new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-        AgentDecisionDto? decision = null;
-        string? error = null;
-        try
+        var run = Task.Run(async () =>
         {
-            decision = await HandleAsync(request, ct);
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-        }
+            try
+            {
+                var progress = new ChannelProgress(channel.Writer);
+                var decision = await HandleCoreAsync(request, progress, ct);
+                await channel.Writer.WriteAsync(new AgentStreamEvent("done", null, decision), ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                await channel.Writer.WriteAsync(new AgentStreamEvent("cancelled", "stream cancelled"), CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                await channel.Writer.WriteAsync(new AgentStreamEvent("error", ex.Message), CancellationToken.None);
+            }
+            finally
+            {
+                channel.Writer.TryComplete();
+            }
+        }, ct);
 
-        if (error is not null)
-        {
-            yield return new AgentStreamEvent("error", error);
-            yield break;
-        }
+        await foreach (var ev in channel.Reader.ReadAllAsync(ct))
+            yield return ev;
 
-        yield return new AgentStreamEvent("status", "agent_completed");
-
-        foreach (var step in decision!.Steps)
-        {
-            ct.ThrowIfCancellationRequested();
-            yield return new AgentStreamEvent("step", step.Step, step);
-            await Task.Yield();
-        }
-
-        foreach (var tool in decision.ToolSequence)
-            yield return new AgentStreamEvent("tool", tool);
-
-        if (decision.HasPendingApprovals)
-            yield return new AgentStreamEvent("approval_required", decision.AgentSessionId, decision.PendingApprovals);
-
-        foreach (var chunk in ChunkText(decision.Reply, 12))
-        {
-            ct.ThrowIfCancellationRequested();
-            yield return new AgentStreamEvent("reply_delta", chunk);
-            await Task.Delay(12, ct);
-        }
-
-        yield return new AgentStreamEvent("done", null, decision);
+        try { await run; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* client cancelled */ }
     }
 
-    private static IEnumerable<string> ChunkText(string text, int size)
+    private sealed class ChannelProgress(System.Threading.Channels.ChannelWriter<AgentStreamEvent> writer)
+        : IProgress<AgentStreamEvent>
     {
-        if (string.IsNullOrEmpty(text)) yield break;
-        for (var i = 0; i < text.Length; i += size)
-            yield return text[i..Math.Min(i + size, text.Length)];
+        public void Report(AgentStreamEvent value) => writer.TryWrite(value);
     }
 
     private static bool NeedsEvidence(string scenarioId, AgentSignals signals) =>

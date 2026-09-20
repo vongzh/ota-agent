@@ -78,6 +78,7 @@ public sealed class ToolAuditLog
 {
     public long Id { get; set; }
     public string TraceId { get; set; } = "";
+    public string? CaseId { get; set; }
     public string ToolName { get; set; } = "";
     public ToolAccess Access { get; set; }
     public bool Allowed { get; set; }

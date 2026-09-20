@@ -109,6 +109,18 @@ public sealed class RefundDataStore(AppDbContext db) : IRefundDataStore
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<IReadOnlyList<ToolAuditLog>> QueryToolAuditsAsync(
+        string? traceId, string? caseId, int take = 50, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 200);
+        var q = db.ToolAudits.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(traceId))
+            q = q.Where(a => a.TraceId == traceId);
+        if (!string.IsNullOrWhiteSpace(caseId))
+            q = q.Where(a => a.CaseId == caseId);
+        return await q.OrderByDescending(a => a.CreatedAt).Take(take).ToListAsync(ct);
+    }
+
     public IReadOnlyList<ToolContractDto> GetToolContracts()
     {
         LoadContracts();

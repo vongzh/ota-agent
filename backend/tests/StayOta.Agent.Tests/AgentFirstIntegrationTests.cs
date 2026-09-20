@@ -28,12 +28,28 @@ public class AgentFirstIntegrationTests
 
         public Task SaveAsync(string sessionId, AgentSessionSnapshot snapshot, CancellationToken ct = default)
         {
+            snapshot.UpdatedAt = DateTimeOffset.UtcNow;
             _map[sessionId] = snapshot;
             return Task.CompletedTask;
         }
 
         public Task<AgentSessionSnapshot?> GetAsync(string sessionId, CancellationToken ct = default) =>
             Task.FromResult(_map.TryGetValue(sessionId, out var s) ? s : null);
+
+        public Task<IReadOnlyList<AgentSessionSummary>> ListAsync(int take = 50, CancellationToken ct = default)
+        {
+            var list = _map
+                .OrderByDescending(kv => kv.Value.UpdatedAt)
+                .Take(Math.Clamp(take, 1, 200))
+                .Select(kv => new AgentSessionSummary(
+                    kv.Key, kv.Value.TraceId, kv.Value.UserId, kv.Value.OrderId, kv.Value.CaseId,
+                    kv.Value.ScenarioId, kv.Value.PendingApprovals.Count, kv.Value.UpdatedAt))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<AgentSessionSummary>>(list);
+        }
+
+        public Task<bool> DeleteAsync(string sessionId, CancellationToken ct = default) =>
+            Task.FromResult(_map.TryRemove(sessionId, out _));
     }
 
     private sealed class MemorySessionStore : ISessionStore
@@ -144,13 +160,20 @@ public class AgentFirstIntegrationTests
         }
 
         Assert.Contains(events, e => e.Type == "status" && e.Text == "assembling_context");
+        Assert.Contains(events, e => e.Type == "status" && e.Text == "agent_running");
         Assert.Contains(events, e => e.Type == "status" && e.Text == "agent_completed");
+        Assert.Contains(events, e => e.Type == "step");
         Assert.Contains(events, e => e.Type == "tool");
+        Assert.Contains(events, e => e.Type == "reply_delta");
         Assert.Contains(events, e => e.Type == "done");
+        // Real stream: tool/reply events appear before done, not as post-hoc replay only.
+        var doneIdx = events.FindIndex(e => e.Type == "done");
+        var toolIdx = events.FindIndex(e => e.Type == "tool");
+        Assert.True(toolIdx >= 0 && toolIdx < doneIdx);
     }
 
     [Fact]
-    public async Task ConfirmWrite_ExecutesWriteViaAgentWithoutOrchestratorBypass()
+    public async Task ConfirmWrite_AutoApprovesViaFunctionApprovalPath()
     {
         var orch = CreateOrchestrator(out _, out _);
         var decision = await orch.HandleAsync(new AgentMessageRequest(
@@ -160,7 +183,22 @@ public class AgentFirstIntegrationTests
 
         Assert.True(decision.AgentDriven);
         Assert.False(decision.HasPendingApprovals);
+        Assert.Equal("function_approval", decision.Intent);
         Assert.Contains("submit_cancellation", decision.ToolSequence);
+        Assert.DoesNotContain(decision.Steps, s => s.Step == "确认写操作");
+    }
+
+    [Fact]
+    public async Task HitlGate_AlwaysMentionsFunctionApproval()
+    {
+        var orch = CreateOrchestrator(out _, out _);
+        var decision = await orch.HandleAsync(new AgentMessageRequest(
+            "帮我把明天去杭州的酒店免费取消。",
+            ScenarioId: "A"));
+
+        Assert.True(decision.HasPendingApprovals);
+        Assert.NotNull(decision.Hitl);
+        Assert.Contains("FunctionApproval", decision.Hitl!.Gate);
         Assert.DoesNotContain(decision.Steps, s => s.Step == "确认写操作");
     }
 }
