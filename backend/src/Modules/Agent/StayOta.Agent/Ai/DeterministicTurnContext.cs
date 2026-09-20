@@ -1,7 +1,7 @@
 namespace StayOta.Agent.Ai;
 
 /// <summary>
-/// Per-request turn configuration for <see cref="DeterministicRefundChatClient"/>.
+/// Per-request turn configuration for <see cref="DeterministicChatClient"/>.
 /// Instance fields — no static AsyncLocal plan bus.
 /// </summary>
 public sealed class DeterministicTurnPlan
@@ -15,7 +15,7 @@ public sealed class DeterministicTurnPlan
 }
 
 /// <summary>
-/// Scoped holder so <see cref="DeterministicRefundChatClient"/> (scoped) reads the active turn plan.
+/// Scoped holder so <see cref="DeterministicChatClient"/> (scoped) reads the active turn plan.
 /// </summary>
 public sealed class DeterministicTurnContext
 {

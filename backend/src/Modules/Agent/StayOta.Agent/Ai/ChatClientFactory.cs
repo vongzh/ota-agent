@@ -35,7 +35,7 @@ public sealed class ChatClientFactory(
             "openai" => CreateOpenAi(opts.OpenAI, runtime.Model),
             "ollama" => CreateOllama(opts.Ollama, runtime.Model),
             _ => throw new InvalidOperationException(
-                $"Provider '{provider}' is not a remote LLM; resolve DeterministicRefundChatClient from DI")
+                $"Provider '{provider}' is not a remote LLM; resolve DeterministicChatClient from DI")
         };
     }
 

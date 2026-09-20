@@ -43,6 +43,21 @@ public sealed class CallerIdentityMiddleware(RequestDelegate next, IOptions<Host
     }
 }
 
+/// <summary>
+/// Optional demo isolation: reads <c>X-Scope-Id</c> and prefixes Redis keys via <see cref="RequestScopeContext"/>.
+/// </summary>
+public sealed class RequestScopeMiddleware(RequestDelegate next)
+{
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var raw = context.Request.Headers["X-Scope-Id"].FirstOrDefault();
+        using var _ = RequestScopeContext.Push(new RequestScope(raw));
+        if (!string.IsNullOrEmpty(RequestScopeContext.CurrentScope.ScopeId))
+            context.Response.Headers["X-Scope-Id"] = RequestScopeContext.CurrentScope.ScopeId;
+        await next(context);
+    }
+}
+
 /// <summary>Fixed-window rate limiter keyed by API key or remote IP.</summary>
 public sealed class RateLimitMiddleware(RequestDelegate next, IOptions<RateLimitOptions> options)
 {

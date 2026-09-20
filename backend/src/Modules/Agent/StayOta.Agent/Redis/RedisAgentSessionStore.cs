@@ -1,27 +1,33 @@
 using System.Text.Json;
 using StackExchange.Redis;
 using StayOta.Agent.Abstractions.Ai;
+using StayOta.Agent.Abstractions.Security;
 
 namespace StayOta.Agent.Redis;
 
 public sealed class RedisAgentSessionStore(IConnectionMultiplexer mux) : IAgentSessionStore
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromHours(2);
-    private const string IndexKey = "agent:sessions:index";
+
+    private static string IndexKey =>
+        $"{RequestScopeContext.CurrentScope.KeyPrefix}agent:sessions:index";
+
+    private static string SessionKey(string sessionId) =>
+        $"{RequestScopeContext.CurrentScope.KeyPrefix}agent:session:{sessionId}";
 
     public async Task SaveAsync(string sessionId, AgentSessionSnapshot snapshot, CancellationToken ct = default)
     {
         snapshot.UpdatedAt = DateTimeOffset.UtcNow;
         var db = mux.GetDatabase();
         var json = JsonSerializer.Serialize(snapshot);
-        await db.StringSetAsync($"agent:session:{sessionId}", json, Ttl);
+        await db.StringSetAsync(SessionKey(sessionId), json, Ttl);
         await db.SortedSetAddAsync(IndexKey, sessionId, snapshot.UpdatedAt.ToUnixTimeSeconds());
     }
 
     public async Task<AgentSessionSnapshot?> GetAsync(string sessionId, CancellationToken ct = default)
     {
         var db = mux.GetDatabase();
-        var value = await db.StringGetAsync($"agent:session:{sessionId}");
+        var value = await db.StringGetAsync(SessionKey(sessionId));
         if (value.IsNullOrEmpty) return null;
         return JsonSerializer.Deserialize<AgentSessionSnapshot>((string)value!);
     }
@@ -60,7 +66,7 @@ public sealed class RedisAgentSessionStore(IConnectionMultiplexer mux) : IAgentS
     public async Task<bool> DeleteAsync(string sessionId, CancellationToken ct = default)
     {
         var db = mux.GetDatabase();
-        var removed = await db.KeyDeleteAsync($"agent:session:{sessionId}");
+        var removed = await db.KeyDeleteAsync(SessionKey(sessionId));
         await db.SortedSetRemoveAsync(IndexKey, sessionId);
         return removed;
     }

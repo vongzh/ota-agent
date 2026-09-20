@@ -81,7 +81,8 @@ public class AgentFirstIntegrationTests
         agentSessions = new MemoryAgentSessionStore();
         var turn = new DeterministicTurnContext();
         var hitl = new TurnHitlOptions();
-        var chat = new DeterministicRefundChatClient(turn);
+        var planner = new CompositeDeterministicIntentPlanner([new RefundDeterministicIntentPlanner()]);
+        var chat = new DeterministicChatClient(turn, planner);
         var plugin = new RefundAgentPlugin();
         var echo = new StayOta.Agent.Plugins.Echo.EchoAgentPlugin();
         var registry = new AgentPluginRegistry([plugin, echo]);

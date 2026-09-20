@@ -3,12 +3,16 @@
     <div class="workspace-heading">
       <div>
         <h1>框架调试台</h1>
-        <p>Session · Tool Audit · MCP · Provider — 验证多插件与运行时运维面。</p>
+        <p>Session · Approval · Eval · Audit · MCP · Provider · Scope</p>
       </div>
       <div class="heading-actions">
         <span v-for="p in plugins" :key="p.id" class="status-pill" :class="p.isPrimary ? 'success' : 'neutral'">
           {{ p.id }}{{ p.isPrimary ? ' · primary' : '' }}
         </span>
+        <label class="scope-chip">
+          Scope
+          <input v-model="scopeDraft" placeholder="demo-customer-a" @change="applyScope" @keydown.enter="applyScope" />
+        </label>
       </div>
     </div>
 
@@ -57,6 +61,100 @@
         </tbody>
       </table>
       <pre v-if="sessionDetail" class="code-block">{{ sessionDetail }}</pre>
+    </section>
+
+    <!-- Approvals -->
+    <section v-if="tab === 'approvals'" class="panel pad">
+      <div class="section-head">
+        <h2>Approval 队列</h2>
+        <button class="ghost-btn" :disabled="loading" @click="loadApprovals">刷新待批</button>
+      </div>
+      <p class="hint">聚合当前 Scope 下含 Pending Approval 的 Session；可检视参数后批准 / 拒绝。</p>
+      <div v-if="!approvalRows.length" class="empty">暂无待批（先在处理台触发写门禁）</div>
+      <div v-else class="approval-list">
+        <article
+          v-for="row in approvalRows"
+          :key="row.requestId"
+          class="approval-item"
+          :class="{ 'is-selected': selectedApproval?.requestId === row.requestId }"
+          @click="selectedApproval = row"
+        >
+          <div class="approval-item-top">
+            <code>{{ row.toolName }}</code>
+            <span class="status-pill warning">pending</span>
+            <small>{{ row.scenarioId }} · {{ row.sessionId.slice(0, 12) }}…</small>
+          </div>
+          <p>{{ row.description || 'FunctionApproval' }}</p>
+        </article>
+      </div>
+      <div v-if="selectedApproval" class="approval-detail">
+        <h3>参数 · {{ selectedApproval.toolName }}</h3>
+        <pre class="code-block">{{ formatJson(selectedApproval.arguments) }}</pre>
+        <div class="row-actions">
+          <button class="primary-btn" :disabled="loading" @click="decideApproval(true)">批准</button>
+          <button class="ghost-btn" :disabled="loading" @click="decideApproval(false)">拒绝</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Eval -->
+    <section v-if="tab === 'eval'" class="panel pad">
+      <div class="section-head">
+        <h2>Eval · expected / actual</h2>
+        <button class="primary-btn" :disabled="loading" @click="runOfflineEval">跑 Eval</button>
+      </div>
+      <p v-if="evalSummary" class="banner success">{{ evalSummary }}</p>
+      <div v-if="!evalResults.length" class="empty">运行后展示逐条 diff</div>
+      <table v-else class="grid-table">
+        <thead>
+          <tr>
+            <th>Id</th>
+            <th>Pass</th>
+            <th>Scenario</th>
+            <th>Message</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="r in evalResults"
+            :key="r.id"
+            :class="{ 'is-fail': !r.passed }"
+            @click="selectedEval = r"
+          >
+            <td><code>{{ r.id }}</code></td>
+            <td>
+              <span class="status-pill" :class="r.passed ? 'success' : 'danger'">
+                {{ r.passed ? 'pass' : 'fail' }}
+              </span>
+            </td>
+            <td>{{ r.expectedScenario }} → {{ r.actualScenario }}</td>
+            <td class="msg-cell">{{ r.message }}</td>
+            <td><button class="ghost-btn" @click.stop="selectedEval = r">Diff</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="selectedEval" class="diff-pane">
+        <h3>Diff · {{ selectedEval.id }}</h3>
+        <p class="hint">{{ selectedEval.detail || '—' }}</p>
+        <table class="grid-table diff-table">
+          <thead>
+            <tr><th>Field</th><th>Expected</th><th>Actual</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="f in evalDiffRows" :key="f.label">
+              <td><code>{{ f.label }}</code></td>
+              <td>{{ f.expected }}</td>
+              <td>{{ f.actual }}</td>
+              <td>
+                <span class="status-pill" :class="f.match ? 'success' : 'danger'">
+                  {{ f.match ? 'ok' : '≠' }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- Audits -->
@@ -153,7 +251,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   deleteSession,
   getAiProvider,
@@ -163,13 +261,20 @@ import {
   listPlugins,
   listSessions,
   queryAudits,
+  respondToApproval,
+  runEval,
   setAiProvider,
   type AgentSessionSummary,
+  type EvalResultRow,
   type ToolAuditRow,
 } from '@/api/agent'
+import { buildEvalDiff } from '@/utils/evalDiff'
+import { getScopeId, setScopeId } from '@/utils/scope'
 
 const tabs = [
   { id: 'sessions', label: 'Sessions' },
+  { id: 'approvals', label: 'Approvals' },
+  { id: 'eval', label: 'Eval Diff' },
   { id: 'audits', label: 'Audits' },
   { id: 'mcp', label: 'MCP Inspector' },
   { id: 'provider', label: 'Provider' },
@@ -179,9 +284,27 @@ const tab = ref<(typeof tabs)[number]['id']>('sessions')
 const loading = ref(false)
 const errorText = ref('')
 const plugins = ref<Array<{ id: string; displayName: string; agentName: string; isPrimary: boolean }>>([])
+const scopeDraft = ref(getScopeId())
 
 const sessions = ref<AgentSessionSummary[]>([])
 const sessionDetail = ref('')
+
+type ApprovalRow = {
+  sessionId: string
+  scenarioId: string
+  requestId: string
+  toolName: string
+  description: string
+  arguments: Record<string, unknown>
+}
+const approvalRows = ref<ApprovalRow[]>([])
+const selectedApproval = ref<ApprovalRow | null>(null)
+
+const evalResults = ref<EvalResultRow[]>([])
+const evalSummary = ref('')
+const selectedEval = ref<EvalResultRow | null>(null)
+const evalDiffRows = computed(() =>
+  selectedEval.value ? buildEvalDiff(selectedEval.value) : [])
 
 const auditTraceId = ref('')
 const auditCaseId = ref('')
@@ -198,6 +321,19 @@ const modelDraft = ref('')
 
 function formatTime(iso: string) {
   try { return new Date(iso).toLocaleString() } catch { return iso }
+}
+
+function formatJson(v: unknown) {
+  try { return JSON.stringify(v ?? {}, null, 2) } catch { return String(v) }
+}
+
+function applyScope() {
+  setScopeId(scopeDraft.value)
+  scopeDraft.value = getScopeId()
+  sessions.value = []
+  approvalRows.value = []
+  selectedApproval.value = null
+  sessionDetail.value = ''
 }
 
 async function wrap(fn: () => Promise<void>) {
@@ -234,6 +370,52 @@ async function removeSession(id: string) {
     await deleteSession(id)
     sessionDetail.value = ''
     sessions.value = await listSessions()
+  })
+}
+
+async function loadApprovals() {
+  await wrap(async () => {
+    const list = await listSessions(100)
+    const pending = list.filter((s) => s.pendingApprovalCount > 0)
+    const rows: ApprovalRow[] = []
+    for (const s of pending) {
+      const detail = await getSession(s.sessionId)
+      for (const p of detail.pendingApprovals ?? []) {
+        rows.push({
+          sessionId: s.sessionId,
+          scenarioId: s.scenarioId,
+          requestId: p.requestId,
+          toolName: p.toolName,
+          description: p.description,
+          arguments: p.arguments ?? {},
+        })
+      }
+    }
+    approvalRows.value = rows
+    selectedApproval.value = rows[0] ?? null
+  })
+}
+
+async function decideApproval(approved: boolean) {
+  const row = selectedApproval.value
+  if (!row) return
+  await wrap(async () => {
+    await respondToApproval({
+      sessionId: row.sessionId,
+      requestId: row.requestId,
+      approved,
+      reason: approved ? 'console approved' : 'console rejected',
+    })
+    await loadApprovals()
+  })
+}
+
+async function runOfflineEval() {
+  await wrap(async () => {
+    const res = await runEval()
+    evalResults.value = res.results ?? []
+    evalSummary.value = `Eval ${res.passed}/${res.total} passed，失败 ${res.failed}`
+    selectedEval.value = evalResults.value.find((r) => !r.passed) ?? evalResults.value[0] ?? null
   })
 }
 
@@ -306,6 +488,20 @@ onMounted(async () => {
 
 <style scoped>
 .console { display: flex; flex-direction: column; gap: 1rem; }
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #475467;
+}
+.scope-chip input {
+  border: 1px solid var(--border, #d8dde6);
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  width: 10rem;
+  font: inherit;
+}
 .tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .tab {
   border: 1px solid var(--border, #d8dde6);
@@ -329,6 +525,9 @@ onMounted(async () => {
   padding: 0.55rem 0.4rem;
   border-bottom: 1px solid var(--border, #e6e9ef);
 }
+.grid-table tr.is-fail { background: #fef3f2; }
+.grid-table tbody tr { cursor: pointer; }
+.msg-cell { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-actions { display: flex; gap: 0.35rem; }
 .code-block {
   margin-top: 1rem;
@@ -355,4 +554,18 @@ onMounted(async () => {
 .invoke-pane { display: flex; flex-direction: column; gap: 0.4rem; }
 .provider-card p { margin: 0.35rem 0; }
 .banner.danger { background: #fef3f2; color: #b42318; padding: 0.65rem 0.85rem; border-radius: 8px; }
+.banner.success { background: #ecfdf3; color: #027a48; padding: 0.65rem 0.85rem; border-radius: 8px; }
+.approval-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.approval-item {
+  border: 1px solid var(--border, #d8dde6);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+}
+.approval-item.is-selected { border-color: #1a2333; box-shadow: inset 3px 0 0 #1a2333; }
+.approval-item-top { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; }
+.approval-item p { margin: 0.35rem 0 0; color: #475467; font-size: 0.88rem; }
+.approval-detail { margin-top: 1rem; }
+.diff-pane { margin-top: 1rem; }
+.diff-table td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
 </style>

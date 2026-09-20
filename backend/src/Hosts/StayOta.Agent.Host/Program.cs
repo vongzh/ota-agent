@@ -129,6 +129,7 @@ app.UseCors();
 app.UseMiddleware<RateLimitMiddleware>();
 app.UseMiddleware<ApiKeyMiddleware>();
 app.UseMiddleware<CallerIdentityMiddleware>();
+app.UseMiddleware<RequestScopeMiddleware>();
 app.MapControllers();
 app.MapMcp("/mcp");
 

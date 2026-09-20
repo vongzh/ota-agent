@@ -1,15 +1,19 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
+using StayOta.Agent.Abstractions.Ai;
 
 namespace StayOta.Agent.Ai;
 
 /// <summary>
 /// Offline / demo <see cref="IChatClient"/>. Turn plan comes from scoped
-/// <see cref="DeterministicTurnContext"/> — no static AsyncLocal plan bus.
+/// <see cref="DeterministicTurnContext"/>; autonomous tool picks come from
+/// plugin-registered <see cref="IDeterministicIntentPlanner"/> instances.
 /// </summary>
-public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnContext) : IChatClient
+public sealed class DeterministicChatClient(
+    DeterministicTurnContext turnContext,
+    IDeterministicIntentPlanner intentPlanner) : IChatClient
 {
-    public ChatClientMetadata Metadata { get; } = new("deterministic", new Uri("local://stayota-refund-agent"));
+    public ChatClientMetadata Metadata { get; } = new("deterministic", new Uri("local://stayota-agent"));
 
     public void Dispose()
     {
@@ -18,7 +22,9 @@ public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnC
     public object? GetService(Type serviceType, object? key = null)
     {
         if (serviceType == typeof(ChatClientMetadata)) return Metadata;
-        if (serviceType == typeof(DeterministicRefundChatClient)) return this;
+        if (serviceType == typeof(DeterministicChatClient)) return this;
+        // Backward-compat service lookup used by older tests/hosts.
+        if (serviceType.Name == "DeterministicRefundChatClient") return this;
         return null;
     }
 
@@ -58,7 +64,7 @@ public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnC
         }
 
         var reply = turnContext.Plan?.SuggestedReply
-                    ?? "退款助手已完成本轮决策（确定性 ChatClient，可替换为 Azure OpenAI / Foundry）。";
+                    ?? "助手已完成本轮决策（确定性 ChatClient，可替换为 Azure OpenAI / Foundry）。";
         return Task.FromResult(new ChatResponse([
             new ChatMessage(ChatRole.Assistant, reply)
         ]));
@@ -71,21 +77,19 @@ public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnC
 
         var planned = new List<string>();
 
-        // Soft hints from scenario fixture (executed by Agent → Gateway, not Orchestrator)
         if (plan.HintTools is { Count: > 0 })
         {
             planned.AddRange(plan.HintTools.Where(available.Contains).Distinct(StringComparer.Ordinal));
         }
         else if (plan.AllowAutonomousToolSelection)
         {
-            planned.AddRange(ToolIntentPlanner.Select(
+            planned.AddRange(intentPlanner.Select(
                 plan.UserMessage,
                 plan.ConversationState,
                 available,
                 preferredWriteTool: null));
         }
 
-        // Append preferred write last so ApprovalRequiredAIFunction can surface HITL after reads.
         if (!string.IsNullOrWhiteSpace(plan.PreferredWriteTool) &&
             available.Contains(plan.PreferredWriteTool!) &&
             !planned.Contains(plan.PreferredWriteTool!, StringComparer.Ordinal))
@@ -104,7 +108,6 @@ public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnC
         var response = await GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
         foreach (var message in response.Messages)
         {
-            // Stream text in small chunks so SSE can emit real reply_delta increments.
             var textParts = message.Contents.OfType<TextContent>().ToList();
             var other = message.Contents.Where(c => c is not TextContent).ToList();
 
@@ -125,4 +128,36 @@ public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnC
             }
         }
     }
+}
+
+/// <summary>Obsolete alias — use <see cref="DeterministicChatClient"/>.</summary>
+[Obsolete("Use DeterministicChatClient; refund intent planning lives in Plugins.Refund.")]
+public sealed class DeterministicRefundChatClient : IChatClient
+{
+    private readonly DeterministicChatClient _inner;
+
+    public DeterministicRefundChatClient(
+        DeterministicTurnContext turnContext,
+        IDeterministicIntentPlanner? intentPlanner = null)
+    {
+        _inner = new DeterministicChatClient(
+            turnContext,
+            intentPlanner ?? new CompositeDeterministicIntentPlanner([]));
+    }
+
+    public ChatClientMetadata Metadata => _inner.Metadata;
+    public void Dispose() => _inner.Dispose();
+    public object? GetService(Type serviceType, object? key = null) => _inner.GetService(serviceType, key);
+
+    public Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        _inner.GetResponseAsync(messages, options, cancellationToken);
+
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        _inner.GetStreamingResponseAsync(messages, options, cancellationToken);
 }

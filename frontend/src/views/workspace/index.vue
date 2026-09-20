@@ -127,16 +127,36 @@
           <div v-if="decision.hitl?.requiresConfirmation || decision.hasPendingApprovals" class="hitl-banner">
             <div>
               <strong>{{ decision.hasPendingApprovals ? '官方 FunctionApproval 待批' : 'HITL 写门禁待确认' }}</strong>
-              <p v-if="decision.hasPendingApprovals && decision.pendingApprovals?.length">
-                Tool <code>{{ decision.pendingApprovals[0].toolName }}</code>
-                · {{ decision.pendingApprovals[0].description }}
-              </p>
-              <p v-else>
+              <p v-if="!decision.hasPendingApprovals">
                 动作 <code>{{ decision.hitl?.pendingAction }}</code>
                 · {{ decision.hitl?.gate }}
               </p>
             </div>
             <span class="status-pill warning">{{ decision.hasPendingApprovals ? 'ToolApprovalRequest' : 'ApprovalRequired' }}</span>
+          </div>
+          <div
+            v-if="decision.hasPendingApprovals && decision.pendingApprovals?.length"
+            class="approval-queue"
+          >
+            <div class="approval-queue-head">
+              <strong>审批队列 · {{ decision.pendingApprovals.length }}</strong>
+              <span class="hint">选择一条查看参数后批准 / 拒绝</span>
+            </div>
+            <div
+              v-for="(p, idx) in decision.pendingApprovals"
+              :key="p.requestId"
+              class="approval-card"
+              :class="{ 'is-selected': selectedApprovalId === p.requestId }"
+              @click="selectedApprovalId = p.requestId"
+            >
+              <div class="approval-card-top">
+                <span class="status-pill neutral">#{{ idx + 1 }}</span>
+                <code>{{ p.toolName }}</code>
+                <small>{{ p.requestId.slice(0, 10) }}…</small>
+              </div>
+              <p>{{ p.description || '待审批写工具' }}</p>
+              <pre v-if="selectedApprovalId === p.requestId" class="args-block">{{ formatArgs(p.arguments) }}</pre>
+            </div>
           </div>
           <div class="action-ctas">
             <button
@@ -152,8 +172,10 @@
               @click="withReason"
             >补充无法入住原因</button>
             <template v-if="decision.hasPendingApprovals && decision.pendingApprovals?.length && decision.agentSessionId">
-              <button class="primary-btn" :disabled="loading" @click="approveFunction(true)">批准执行</button>
-              <button class="ghost-btn" :disabled="loading" @click="approveFunction(false)">拒绝</button>
+              <button class="primary-btn" :disabled="loading || !selectedPending" @click="approveFunction(true)">
+                批准 {{ selectedPending?.toolName || '' }}
+              </button>
+              <button class="ghost-btn" :disabled="loading || !selectedPending" @click="approveFunction(false)">拒绝</button>
             </template>
             <button
               v-else-if="decision.action === 'ConfirmCancel' || decision.action === 'ChangeOrder' || decision.hitl?.requiresConfirmation"
@@ -311,6 +333,12 @@ const mobilePane = ref<'chat' | 'decision'>('chat')
 const demoEnabled = ref(true)
 const streamStatus = ref('')
 const streamReply = ref('')
+const selectedApprovalId = ref('')
+
+const selectedPending = computed(() =>
+  decision.value?.pendingApprovals?.find((p) => p.requestId === selectedApprovalId.value)
+  ?? decision.value?.pendingApprovals?.[0]
+  ?? null)
 
 const pipeline = computed(() => decision.value?.steps ?? [
   { step: '意图识别', status: 'pending', detail: '' },
@@ -371,9 +399,17 @@ async function confirmWrite() {
     idempotencyKey: `ui-${activeId.value}-${Date.now()}`,
   })
 }
+function formatArgs(args: Record<string, unknown> | undefined) {
+  try {
+    return JSON.stringify(args ?? {}, null, 2)
+  } catch {
+    return String(args)
+  }
+}
+
 async function approveFunction(approved: boolean) {
   const d = decision.value
-  const pending = d?.pendingApprovals?.[0]
+  const pending = selectedPending.value ?? d?.pendingApprovals?.[0]
   if (!d?.agentSessionId || !pending) return
   loading.value = true
   errorText.value = ''
@@ -384,6 +420,8 @@ async function approveFunction(approved: boolean) {
       approved,
       reason: approved ? '用户批准写操作' : '用户拒绝写操作',
     })
+    const next = decision.value.pendingApprovals?.[0]
+    selectedApprovalId.value = next?.requestId || ''
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     errorText.value = err.response?.data?.message || 'FunctionApproval 失败'
@@ -429,6 +467,7 @@ async function run(payload: Record<string, unknown>) {
       onReplyDelta: (chunk) => { streamReply.value += chunk },
       onError: (msg) => { errorText.value = msg },
     })
+    selectedApprovalId.value = decision.value.pendingApprovals?.[0]?.requestId || ''
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } }; message?: string }
     errorText.value = err.response?.data?.message || err.message || 'Agent 调用失败'
@@ -859,5 +898,47 @@ function actionLabel(action: string) {
   .mobile-switch { display: flex; }
   .mobile-hidden { display: none !important; }
   .scenario-rail { order: 3; }
+}
+
+.approval-queue {
+  margin: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.approval-queue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.9rem;
+}
+.approval-queue-head .hint { color: #667085; font-size: 0.8rem; }
+.approval-card {
+  border: 1px solid var(--border, #d8dde6);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  background: #fff;
+}
+.approval-card.is-selected {
+  border-color: #1a2333;
+  box-shadow: inset 3px 0 0 #1a2333;
+}
+.approval-card-top {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.approval-card p { margin: 0.35rem 0 0; color: #475467; font-size: 0.88rem; }
+.args-block {
+  margin: 0.5rem 0 0;
+  padding: 0.55rem 0.65rem;
+  background: #0f172a0a;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  overflow: auto;
+  max-height: 10rem;
 }
 </style>

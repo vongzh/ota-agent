@@ -523,12 +523,22 @@ public sealed class EvalRunner(IRefundDataStore store, IAgentOrchestrator orches
             var routed = _router.Route(c.Message, null);
             var passed = routed == c.ExpectedScenario;
             string? detail = null;
+            string? actualAction = null;
+            IReadOnlyList<string>? actualTools = null;
+            decimal? actualRefund = null;
+            decimal? actualFee = null;
+
             if (passed)
             {
                 try
                 {
                     var decision = await orchestrator.HandleAsync(
                         new AgentMessageRequest(c.Message, c.ExpectedScenario, ResetDemo: false), ct);
+                    actualAction = decision.Action;
+                    actualTools = decision.ToolSequence;
+                    actualRefund = decision.RefundAmount;
+                    actualFee = decision.FeeAmount;
+
                     var violations = new List<string>();
                     if (decision.ScenarioId != c.ExpectedScenario)
                         violations.Add($"scenario={decision.ScenarioId}");
@@ -565,7 +575,22 @@ public sealed class EvalRunner(IRefundDataStore store, IAgentOrchestrator orches
                 }
             }
             else detail = $"routed={routed}";
-            results.Add(new EvalResultDto(c.Id, c.Message, c.ExpectedScenario, routed, passed, detail));
+
+            results.Add(new EvalResultDto(
+                c.Id,
+                c.Message,
+                c.ExpectedScenario,
+                routed,
+                passed,
+                detail,
+                c.ExpectedAction,
+                actualAction,
+                c.ExpectedToolsSubsequence,
+                actualTools,
+                c.MinRefundAmount,
+                actualRefund,
+                c.MaxFeeAmount,
+                actualFee));
         }
         return results;
     }

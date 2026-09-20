@@ -60,9 +60,14 @@ public static class StayOtaAgentServiceCollectionExtensions
         services.AddSingleton<IGuardrailPipeline, StayOta.Agent.Security.GuardrailPipeline>();
 
         services.AddSingleton<IChatClientFactory, ChatClientFactory>();
+        // Plugin planners register as IDeterministicIntentPlanner; composite is separate (avoids DI cycle).
+        services.AddSingleton<CompositeDeterministicIntentPlanner>(sp =>
+            new CompositeDeterministicIntentPlanner(sp.GetServices<IDeterministicIntentPlanner>()));
         services.AddScoped<DeterministicTurnContext>();
         services.AddScoped<TurnHitlOptions>();
-        services.AddScoped<DeterministicRefundChatClient>();
+        services.AddScoped(sp => new DeterministicChatClient(
+            sp.GetRequiredService<DeterministicTurnContext>(),
+            sp.GetRequiredService<CompositeDeterministicIntentPlanner>()));
         services.AddScoped<IChatClient>(sp =>
         {
             var hostOpts = sp.GetRequiredService<IOptions<HostingOptions>>().Value;
@@ -80,12 +85,12 @@ public static class StayOtaAgentServiceCollectionExtensions
                         throw;
 
                     var logger = sp.GetService<ILoggerFactory>()?.CreateLogger("ChatClientRegistration");
-                    logger?.LogWarning(ex, "Falling back to DeterministicRefundChatClient");
-                    return sp.GetRequiredService<DeterministicRefundChatClient>();
+                    logger?.LogWarning(ex, "Falling back to DeterministicChatClient");
+                    return sp.GetRequiredService<DeterministicChatClient>();
                 }
             }
 
-            return sp.GetRequiredService<DeterministicRefundChatClient>();
+            return sp.GetRequiredService<DeterministicChatClient>();
         });
 
         services.AddScoped<IAgentHost, ChatClientAgentHost>();

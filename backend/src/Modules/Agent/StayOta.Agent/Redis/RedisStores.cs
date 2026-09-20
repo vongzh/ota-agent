@@ -1,5 +1,6 @@
 using StackExchange.Redis;
 using StayOta.Agent.Abstractions.Contracts;
+using StayOta.Agent.Abstractions.Security;
 
 namespace StayOta.Agent.Redis;
 
@@ -30,7 +31,8 @@ public sealed class RedisConfirmationStore(IConnectionMultiplexer mux) : IConfir
         return false;
     }
 
-    private static string Key(string token) => $"refund:confirm:{token}";
+    private static string Key(string token) =>
+        $"{RequestScopeContext.CurrentScope.KeyPrefix}refund:confirm:{token}";
 }
 
 public sealed class RedisIdempotencyStore(IConnectionMultiplexer mux) : IIdempotencyStore
@@ -79,17 +81,20 @@ public sealed class RedisIdempotencyStore(IConnectionMultiplexer mux) : IIdempot
             await db.KeyDeleteAsync(redisKey);
     }
 
-    private static string RedisKey(string key) => $"refund:idem:{key}";
+    private static string RedisKey(string key) =>
+        $"{RequestScopeContext.CurrentScope.KeyPrefix}refund:idem:{key}";
 }
 
 public sealed class RedisSessionStore(IConnectionMultiplexer mux) : ISessionStore
 {
     public Task SetAsync(string sessionId, string json, TimeSpan ttl, CancellationToken ct = default) =>
-        mux.GetDatabase().StringSetAsync($"refund:session:{sessionId}", json, ttl);
+        mux.GetDatabase().StringSetAsync(
+            $"{RequestScopeContext.CurrentScope.KeyPrefix}refund:session:{sessionId}", json, ttl);
 
     public async Task<string?> GetAsync(string sessionId, CancellationToken ct = default)
     {
-        var value = await mux.GetDatabase().StringGetAsync($"refund:session:{sessionId}");
+        var value = await mux.GetDatabase().StringGetAsync(
+            $"{RequestScopeContext.CurrentScope.KeyPrefix}refund:session:{sessionId}");
         return value.IsNullOrEmpty ? null : value.ToString();
     }
 }

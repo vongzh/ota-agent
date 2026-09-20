@@ -1,13 +1,13 @@
-namespace StayOta.Agent.Ai;
+using StayOta.Agent.Abstractions.Ai;
 
-/// <summary>
-/// Lightweight deterministic tool planner: picks allowed tools from the user message
-/// and conversation state when the orchestrator does not pre-plan a tool list.
-/// Real LLM providers ignore this and choose tools via function calling.
-/// </summary>
-public static class ToolIntentPlanner
+namespace StayOta.Agent.Plugins.Refund.Ai;
+
+/// <summary>Refund-vertical deterministic tool picker (formerly core ToolIntentPlanner).</summary>
+public sealed class RefundDeterministicIntentPlanner : IDeterministicIntentPlanner
 {
-    public static IReadOnlyList<string> Select(
+    public string PluginId => "refund";
+
+    public IReadOnlyList<string> Select(
         string message,
         string conversationState,
         IReadOnlyCollection<string> availableTools,
@@ -25,7 +25,6 @@ public static class ToolIntentPlanner
         var msg = message ?? "";
         var state = conversationState ?? "";
 
-        // Core reads for most refund turns
         if (LooksLikeOrderLookup(msg) || state is "START" or "INTENT_READY" or "ORDER_SELECTION_REQUIRED" or "")
             Add("list_user_orders");
         Add("get_order_detail");
@@ -72,9 +71,7 @@ public static class ToolIntentPlanner
         }
 
         if (LooksLikeChange(msg))
-        {
             Add("get_change_quote");
-        }
 
         if (LooksLikeFinance(msg))
         {
@@ -98,7 +95,6 @@ public static class ToolIntentPlanner
         if (!string.IsNullOrWhiteSpace(preferredWriteTool))
             Add(preferredWriteTool!);
 
-        // Cap to keep deterministic turns bounded; LLM path can call more via multi-step.
         if (picks.Count == 0)
         {
             Add("get_order_detail");

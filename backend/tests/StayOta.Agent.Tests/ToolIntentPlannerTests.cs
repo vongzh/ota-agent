@@ -1,5 +1,7 @@
 using Microsoft.Extensions.AI;
+using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Ai;
+using StayOta.Agent.Plugins.Refund.Ai;
 using Xunit;
 
 namespace StayOta.Agent.Tests;
@@ -16,10 +18,13 @@ public class ToolIntentPlannerTests
         "submit_cancellation"
     ];
 
+    private static readonly IDeterministicIntentPlanner Planner =
+        new CompositeDeterministicIntentPlanner([new RefundDeterministicIntentPlanner()]);
+
     [Fact]
     public void CancelMessage_SelectsQuoteTools()
     {
-        var tools = ToolIntentPlanner.Select("帮我把明天去杭州的酒店免费取消。", "INTENT_READY", Catalog);
+        var tools = Planner.Select("帮我把明天去杭州的酒店免费取消。", "INTENT_READY", Catalog);
         Assert.Contains("get_order_detail", tools);
         Assert.Contains("calculate_refund_quote", tools);
         Assert.DoesNotContain("create_finance_case", tools);
@@ -28,7 +33,7 @@ public class ToolIntentPlannerTests
     [Fact]
     public void ProgressMessage_SelectsRefundTrackingTools()
     {
-        var tools = ToolIntentPlanner.Select("退款已经提交三天了，怎么还没有到账？", "TRACKING_REFUND", Catalog);
+        var tools = Planner.Select("退款已经提交三天了，怎么还没有到账？", "TRACKING_REFUND", Catalog);
         Assert.Contains("get_refund_status", tools);
         Assert.Contains("get_payment_events", tools);
     }
@@ -36,7 +41,7 @@ public class ToolIntentPlannerTests
     [Fact]
     public void PreferredWriteTool_IsIncluded()
     {
-        var tools = ToolIntentPlanner.Select("确认取消", "CONFIRMATION_REQUIRED", Catalog, "submit_cancellation");
+        var tools = Planner.Select("确认取消", "CONFIRMATION_REQUIRED", Catalog, "submit_cancellation");
         Assert.Contains("submit_cancellation", tools);
     }
 
@@ -53,7 +58,7 @@ public class ToolIntentPlannerTests
             SuggestedReply = "ok"
         });
 
-        var client = new DeterministicRefundChatClient(turn);
+        var client = new DeterministicChatClient(turn, Planner);
         var getOrder = AIFunctionFactory.Create(() => new { ok = true }, "get_order_detail", "order");
         var quote = AIFunctionFactory.Create(() => new { ok = true }, "calculate_refund_quote", "quote");
         var response = await client.GetResponseAsync(
@@ -78,7 +83,7 @@ public class ToolIntentPlannerTests
             SuggestedReply = "confirm"
         });
 
-        var client = new DeterministicRefundChatClient(turn);
+        var client = new DeterministicChatClient(turn, Planner);
         var getOrder = AIFunctionFactory.Create(() => new { ok = true }, "get_order_detail", "order");
         var submit = AIFunctionFactory.Create(() => new { ok = true }, "submit_cancellation", "write");
 
