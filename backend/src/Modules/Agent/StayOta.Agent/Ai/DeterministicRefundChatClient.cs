@@ -104,9 +104,24 @@ public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnC
         var response = await GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
         foreach (var message in response.Messages)
         {
-            foreach (var content in message.Contents)
-            {
+            // Stream text in small chunks so SSE can emit real reply_delta increments.
+            var textParts = message.Contents.OfType<TextContent>().ToList();
+            var other = message.Contents.Where(c => c is not TextContent).ToList();
+
+            foreach (var content in other)
                 yield return new ChatResponseUpdate(message.Role, [content]);
+
+            foreach (var text in textParts)
+            {
+                var value = text.Text ?? "";
+                const int chunk = 8;
+                for (var i = 0; i < value.Length; i += chunk)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var piece = value[i..Math.Min(i + chunk, value.Length)];
+                    yield return new ChatResponseUpdate(message.Role, [new TextContent(piece)]);
+                    await Task.Yield();
+                }
             }
         }
     }

@@ -65,6 +65,8 @@ public sealed class AppDbContext : DbContext
             e.ToTable("tool_audits");
             e.HasKey(x => x.Id);
             e.Property(x => x.Id).ValueGeneratedOnAdd();
+            e.HasIndex(x => x.TraceId);
+            e.HasIndex(x => x.CaseId);
         });
         modelBuilder.Entity<ScenarioFixture>(e =>
         {

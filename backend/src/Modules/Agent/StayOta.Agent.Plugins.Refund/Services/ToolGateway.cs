@@ -21,6 +21,7 @@ public interface IRefundDataStore
     Task AppendEventAsync(string caseId, string eventType, object payload, CancellationToken ct = default);
     Task SaveWorkflowRunAsync(WorkflowRun run, CancellationToken ct = default);
     Task SaveToolAuditAsync(ToolAuditLog log, CancellationToken ct = default);
+    Task<IReadOnlyList<ToolAuditLog>> QueryToolAuditsAsync(string? traceId, string? caseId, int take = 50, CancellationToken ct = default);
     IReadOnlyList<ToolContractDto> GetToolContracts();
 }
 
@@ -245,6 +246,7 @@ public sealed class ToolGateway(
         await store.SaveToolAuditAsync(new ToolAuditLog
         {
             TraceId = call.TraceId,
+            CaseId = call.CaseId,
             ToolName = call.ToolName,
             Access = call.Access,
             Allowed = allowed,

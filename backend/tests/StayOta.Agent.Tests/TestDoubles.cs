@@ -154,6 +154,19 @@ internal sealed class MemoryRefundDataStore : IRefundDataStore
         return Task.CompletedTask;
     }
 
+    public Task<IReadOnlyList<ToolAuditLog>> QueryToolAuditsAsync(
+        string? traceId, string? caseId, int take = 50, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 200);
+        IEnumerable<ToolAuditLog> q = Audits;
+        if (!string.IsNullOrWhiteSpace(traceId))
+            q = q.Where(a => a.TraceId == traceId);
+        if (!string.IsNullOrWhiteSpace(caseId))
+            q = q.Where(a => a.CaseId == caseId);
+        return Task.FromResult<IReadOnlyList<ToolAuditLog>>(
+            q.OrderByDescending(a => a.CreatedAt).Take(take).ToList());
+    }
+
     public IReadOnlyList<ToolContractDto> GetToolContracts() => _contracts;
 
     private static List<ToolContractDto> LoadContracts()

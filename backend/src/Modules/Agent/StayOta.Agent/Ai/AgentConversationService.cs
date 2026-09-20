@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -6,6 +7,7 @@ using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Tools;
+using StayOta.Agent.Diagnostics;
 
 namespace StayOta.Agent.Ai;
 
@@ -17,7 +19,15 @@ public sealed class AgentConversationService(
     IToolPolicy toolPolicy,
     ILogger<AgentConversationService> logger) : IAgentConversationService
 {
-    public async Task<AgentTurnResult> RunTurnAsync(AgentTurnRequest request, CancellationToken ct = default)
+    private static readonly IProgress<AgentStreamEvent> NoProgress = new Progress<AgentStreamEvent>(_ => { });
+
+    public Task<AgentTurnResult> RunTurnAsync(AgentTurnRequest request, CancellationToken ct = default) =>
+        RunTurnAsync(request, NoProgress, ct);
+
+    public async Task<AgentTurnResult> RunTurnAsync(
+        AgentTurnRequest request,
+        IProgress<AgentStreamEvent> progress,
+        CancellationToken ct = default)
     {
         // Drive ApprovalRequired wrapping before ChatClientAgentHost lazily builds Agent.
         hitlOptions.RequireFunctionApproval = request.RequireWriteApproval;
@@ -39,8 +49,9 @@ public sealed class AgentConversationService(
             Policy = toolPolicy
         });
 
-        // When RequireWriteApproval: strip confirm tools (HITL via PreferredWriteTool).
-        // When user already confirmed: keep confirm tools in hints so Agent→Gateway executes them.
+        // When RequireWriteApproval: strip confirm tools (HITL via PreferredWriteTool / FunctionApproval).
+        // When user already confirmed via FunctionApproval response path: Confirm tools stay out of hints;
+        // write executes after ToolApprovalResponseContent.
         var hints = request.HintTools
             .Where(t => !request.RequireWriteApproval || !toolPolicy.RequiresConfirmation(t))
             .Where(t => !request.RequireWriteApproval || t != request.WriteToolName)
@@ -59,7 +70,7 @@ public sealed class AgentConversationService(
 
         try
         {
-            return await RunCoreAsync(request, ct);
+            return await RunCoreAsync(request, progress, ct);
         }
         finally
         {
@@ -67,8 +78,17 @@ public sealed class AgentConversationService(
         }
     }
 
-    private async Task<AgentTurnResult> RunCoreAsync(AgentTurnRequest request, CancellationToken ct)
+    private async Task<AgentTurnResult> RunCoreAsync(
+        AgentTurnRequest request,
+        IProgress<AgentStreamEvent> progress,
+        CancellationToken ct)
     {
+        using var activity = AgentTelemetry.ActivitySource.StartActivity("agent.turn", ActivityKind.Internal);
+        activity?.SetTag("agent.trace_id", request.TraceId);
+        activity?.SetTag("agent.case_id", request.CaseId);
+        activity?.SetTag("agent.scenario_id", request.ScenarioId);
+        AgentTelemetry.Turns.Add(1);
+
         AgentSession? session;
         string sessionId;
         AgentSessionSnapshot? prior = null;
@@ -97,20 +117,31 @@ public sealed class AgentConversationService(
             sessionId = $"ags_{Guid.NewGuid():N}"[..20];
         }
 
+        progress.Report(new AgentStreamEvent("status", "agent_running", new { sessionId }));
+
         AgentResponse response;
         try
         {
-            response = await agentHost.Agent.RunAsync(request.Message, session, cancellationToken: ct);
+            response = await RunStreamingCollectAsync(request.Message, session, progress, ct);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Agent turn failed; falling back to suggested reply");
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             return new AgentTurnResult(sessionId, request.SuggestedReply, false, [], [], false);
         }
 
         var pending = ExtractApprovals(response);
         var toolsInvoked = ExtractInvokedTools(response);
         var reply = string.IsNullOrWhiteSpace(response.Text) ? request.SuggestedReply : response.Text;
+
+        if (pending.Count > 0)
+        {
+            progress.Report(new AgentStreamEvent(
+                "approval_required",
+                sessionId,
+                pending.Select(p => new PendingApprovalDto(p.RequestId, p.CallId, p.ToolName, p.Arguments, p.Description)).ToList()));
+        }
 
         var sessionJson = await agentHost.Agent.SerializeSessionAsync(session, cancellationToken: ct);
         var snapshot = prior ?? new AgentSessionSnapshot();
@@ -139,11 +170,46 @@ public sealed class AgentConversationService(
             "Agent turn session={Session} resumed={Resumed} pendingApprovals={Count} tools={Tools}",
             sessionId, prior is not null, pending.Count, string.Join(',', toolsInvoked));
 
+        progress.Report(new AgentStreamEvent("status", "agent_completed", new { sessionId, tools = toolsInvoked }));
         return new AgentTurnResult(sessionId, reply, pending.Count > 0, pending, toolsInvoked, true);
+    }
+
+    private async Task<AgentResponse> RunStreamingCollectAsync(
+        string message,
+        AgentSession session,
+        IProgress<AgentStreamEvent> progress,
+        CancellationToken ct)
+    {
+        var updates = new List<AgentResponseUpdate>();
+        var seenTools = new HashSet<string>(StringComparer.Ordinal);
+
+        await foreach (var update in agentHost.Agent.RunStreamingAsync(message, session, cancellationToken: ct))
+        {
+            updates.Add(update);
+
+            if (!string.IsNullOrEmpty(update.Text))
+                progress.Report(new AgentStreamEvent("reply_delta", update.Text));
+
+            foreach (var content in update.Contents)
+            {
+                if (content is FunctionCallContent call && !string.IsNullOrWhiteSpace(call.Name))
+                {
+                    if (seenTools.Add(call.Name!))
+                        progress.Report(new AgentStreamEvent("tool", call.Name));
+                }
+            }
+        }
+
+        return updates.ToAgentResponse();
     }
 
     public async Task<AgentTurnResult> RespondToApprovalAsync(ApprovalResponseRequest request, CancellationToken ct = default)
     {
+        using var activity = AgentTelemetry.ActivitySource.StartActivity("agent.approval", ActivityKind.Internal);
+        activity?.SetTag("agent.session_id", request.SessionId);
+        activity?.SetTag("agent.approved", request.Approved);
+        AgentTelemetry.Approvals.Add(1, new KeyValuePair<string, object?>("approved", request.Approved));
+
         var snapshot = await sessionStore.GetAsync(request.SessionId, ct)
                        ?? throw new InvalidOperationException("agent session not found or expired");
 

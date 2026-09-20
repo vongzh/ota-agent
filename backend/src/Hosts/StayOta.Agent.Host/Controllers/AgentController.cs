@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Options;
 using StayOta.Agent.Abstractions.Contracts;
+using StayOta.Agent.Plugins.Refund.Services;
 
 namespace StayOta.Agent.Host.Controllers;
 
@@ -15,6 +16,8 @@ public sealed class AgentController(
     IToolGateway tools,
     IEvalRunner evalRunner,
     IScenarioWorkflow workflow,
+    IAgentSessionStore agentSessions,
+    IRefundDataStore dataStore,
     IOptions<HostingOptions> hostingOptions) : ControllerBase
 {
     [HttpGet("scenarios")]
@@ -91,6 +94,45 @@ public sealed class AgentController(
         {
             return BadRequest(new { message = ex.Message });
         }
+    }
+
+    [HttpGet("agent/sessions")]
+    public async Task<ActionResult<IReadOnlyList<AgentSessionSummary>>> ListSessions(
+        [FromQuery] int take = 50, CancellationToken ct = default) =>
+        Ok(await agentSessions.ListAsync(take, ct));
+
+    [HttpGet("agent/sessions/{sessionId}")]
+    public async Task<ActionResult<AgentSessionDetailDto>> GetSession(string sessionId, CancellationToken ct)
+    {
+        var snap = await agentSessions.GetAsync(sessionId, ct);
+        if (snap is null) return NotFound(new { message = "session not found or expired" });
+        var pending = snap.PendingApprovals.Select(p =>
+            new PendingApprovalDto(p.RequestId, p.CallId, p.ToolName, p.Arguments, $"Tool `{p.ToolName}`")).ToList();
+        return Ok(new AgentSessionDetailDto(
+            sessionId, snap.TraceId, snap.UserId, snap.OrderId, snap.CaseId, snap.ScenarioId,
+            snap.ConversationState, pending.Count, pending, snap.UpdatedAt));
+    }
+
+    [HttpDelete("agent/sessions/{sessionId}")]
+    public async Task<ActionResult> DeleteSession(string sessionId, CancellationToken ct)
+    {
+        var deleted = await agentSessions.DeleteAsync(sessionId, ct);
+        return deleted ? NoContent() : NotFound(new { message = "session not found" });
+    }
+
+    [HttpGet("agent/audits")]
+    public async Task<ActionResult<IReadOnlyList<ToolAuditDto>>> QueryAudits(
+        [FromQuery] string? traceId = null,
+        [FromQuery] string? caseId = null,
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(traceId) && string.IsNullOrWhiteSpace(caseId))
+            return BadRequest(new { message = "traceId or caseId is required" });
+
+        var rows = await dataStore.QueryToolAuditsAsync(traceId, caseId, take, ct);
+        return Ok(rows.Select(a => new ToolAuditDto(
+            a.Id, a.TraceId, a.CaseId, a.ToolName, a.Access.ToString(), a.Allowed, a.DenyReason, a.CreatedAt)).ToList());
     }
 
     [HttpPost("workflows/{scenarioId}/run")]

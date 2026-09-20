@@ -6,6 +6,7 @@ namespace StayOta.Agent.Abstractions.Ai;
 public interface IAgentConversationService
 {
     Task<AgentTurnResult> RunTurnAsync(AgentTurnRequest request, CancellationToken ct = default);
+    Task<AgentTurnResult> RunTurnAsync(AgentTurnRequest request, IProgress<AgentStreamEvent> progress, CancellationToken ct = default);
     Task<AgentTurnResult> RespondToApprovalAsync(ApprovalResponseRequest request, CancellationToken ct = default);
 }
 
@@ -55,7 +56,19 @@ public interface IAgentSessionStore
 {
     Task SaveAsync(string sessionId, AgentSessionSnapshot snapshot, CancellationToken ct = default);
     Task<AgentSessionSnapshot?> GetAsync(string sessionId, CancellationToken ct = default);
+    Task<IReadOnlyList<AgentSessionSummary>> ListAsync(int take = 50, CancellationToken ct = default);
+    Task<bool> DeleteAsync(string sessionId, CancellationToken ct = default);
 }
+
+public sealed record AgentSessionSummary(
+    string SessionId,
+    string TraceId,
+    string UserId,
+    string OrderId,
+    string CaseId,
+    string ScenarioId,
+    int PendingApprovalCount,
+    DateTimeOffset? UpdatedAt = null);
 
 public sealed class AgentSessionSnapshot
 {
@@ -72,6 +85,7 @@ public sealed class AgentSessionSnapshot
     public int? ExpectedOrderVersion { get; set; }
     public Dictionary<string, object?> AmbientArguments { get; set; } = new();
     public List<PendingApprovalRecord> PendingApprovals { get; set; } = [];
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 public sealed class PendingApprovalRecord

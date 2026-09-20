@@ -358,6 +358,12 @@ async function withReason() {
   })
 }
 async function confirmWrite() {
+  const d = decision.value
+  // Prefer unified FunctionApproval path when pending approvals already exist.
+  if (d?.hasPendingApprovals && d.pendingApprovals?.length && d.agentSessionId) {
+    await approveFunction(true)
+    return
+  }
   await run({
     message: userMessage.value,
     scenarioId: activeId.value,

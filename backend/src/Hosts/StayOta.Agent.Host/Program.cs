@@ -1,12 +1,16 @@
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using StayOta.Agent;
 using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Options;
 using StayOta.Agent.Abstractions.Plugins;
 using StayOta.Agent.Ai;
+using StayOta.Agent.Diagnostics;
 using StayOta.Agent.Host.Security;
 using StayOta.Agent.Plugins;
 using StayOta.Agent.Plugins.Echo;
@@ -38,6 +42,20 @@ if (builder.Environment.IsProduction())
 builder.Services.AddStayOtaAgent(builder.Configuration);
 builder.Services.AddAgentPlugin<RefundAgentPlugin>(builder.Configuration);
 builder.Services.AddAgentPlugin<EchoAgentPlugin>(builder.Configuration);
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService(AgentTelemetry.ServiceName))
+    .WithTracing(t =>
+    {
+        t.AddSource(AgentTelemetry.ServiceName);
+        t.AddAspNetCoreInstrumentation();
+    })
+    .WithMetrics(m =>
+    {
+        m.AddMeter(AgentTelemetry.ServiceName);
+        m.AddAspNetCoreInstrumentation();
+    });
+
 builder.Services.AddControllers().AddJsonOptions(o =>
 {
     o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -180,7 +198,8 @@ app.MapGet("/health", async (
         ["authRequired"] = !string.IsNullOrWhiteSpace(opts.ApiKey),
         ["moduleLayout"] = "StayOta.Agent + IAgentPlugin (refund, echo)",
         ["plugins"] = plugins.Plugins.Select(p => new { p.Id, p.DisplayName }).ToArray(),
-        ["pgSchema"] = storageOptions.Value.Schema
+        ["pgSchema"] = storageOptions.Value.Schema,
+        ["otel"] = new { service = AgentTelemetry.ServiceName, traces = true, metrics = true }
     };
 
     if (opts.ExposeDetailedHealth)
