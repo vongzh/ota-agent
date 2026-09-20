@@ -187,31 +187,38 @@ public sealed class PolicyRetrieval : IPolicyRetrieval
         PolicyCorpusItem item, string message, string intent, IReadOnlyList<string> queryTags,
         HotelOrder order, PolicySnapshot snapshot)
     {
-        var normalized = message.Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
-        var matchedKeywords = item.Keywords.Where(k =>
-            normalized.Contains(k.Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant())).ToList();
+        var normalized = Normalize(message);
+        var citationNorm = Normalize(item.Citation + item.Title);
+        var matchedKeywords = item.Keywords.Where(k => KeywordMatches(normalized, k)).ToList();
         var matchedTags = item.Tags.Where(t => queryTags.Contains(t, StringComparer.OrdinalIgnoreCase)).ToList();
         var intentMatch = item.IntentTags.Any(t =>
             intent.Contains(t, StringComparison.OrdinalIgnoreCase) ||
-            t.Contains(intent, StringComparison.OrdinalIgnoreCase));
+            t.Contains(intent, StringComparison.OrdinalIgnoreCase) ||
+            KeywordMatches(Normalize(intent), t));
         var orderStateMatch = item.Tags.Contains(order.Status, StringComparer.OrdinalIgnoreCase)
                               || item.Tags.Contains("CONFIRMED", StringComparer.OrdinalIgnoreCase);
+        var bigram = BigramJaccard(normalized, citationNorm);
+        var snapshotBoost = item.PolicyId == snapshot.PolicyId ? 0.14 :
+            (Normalize(snapshot.Title).Length > 0 && citationNorm.Contains(Normalize(snapshot.Title)) ? 0.06 : 0);
 
-        var keywordScore = Math.Min(0.32, matchedKeywords.Count * 0.16);
-        var tagScore = Math.Min(0.27, matchedTags.Count * 0.07);
+        var keywordScore = Math.Min(0.34, matchedKeywords.Count * 0.17);
+        var tagScore = Math.Min(0.28, matchedTags.Count * 0.08);
         var score = Math.Min(
             0.99,
-            item.Priority / 1000.0 +
+            item.Priority / 1200.0 +
             keywordScore +
             tagScore +
-            (intentMatch ? 0.24 : 0) +
-            (orderStateMatch ? 0.1 : 0) +
-            (item.PolicyId == snapshot.PolicyId ? 0.08 : 0));
+            (intentMatch ? 0.26 : 0) +
+            (orderStateMatch ? 0.08 : 0) +
+            bigram * 0.22 +
+            snapshotBoost);
 
         var reasons = new List<string>();
         if (intentMatch) reasons.Add($"匹配意图：{intent}");
         if (matchedKeywords.Count > 0) reasons.Add($"命中关键词：{string.Join('、', matchedKeywords)}");
         if (matchedTags.Count > 0) reasons.Add($"匹配业务标签：{string.Join('、', matchedTags)}");
+        if (bigram >= 0.12) reasons.Add($"文本相似 {bigram:0.00}");
+        if (snapshotBoost > 0) reasons.Add("成交快照加权");
 
         var summary = reasons.Count == 0
             ? item.Citation
@@ -219,6 +226,67 @@ public sealed class PolicyRetrieval : IPolicyRetrieval
 
         return new Scored(item.PolicyId, item.Title, Math.Round(score, 2), summary, item.Priority);
     }
+
+    private static string Normalize(string text) =>
+        (text ?? "").Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
+
+    private static double BigramJaccard(string a, string b)
+    {
+        static HashSet<string> Grams(string s)
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(s)) return set;
+            if (s.Length == 1) { set.Add(s); return set; }
+            for (var i = 0; i < s.Length - 1; i++) set.Add(s[i..(i + 2)]);
+            return set;
+        }
+
+        var ga = Grams(a);
+        var gb = Grams(b);
+        if (ga.Count == 0 || gb.Count == 0) return 0;
+        var inter = ga.Count(g => gb.Contains(g));
+        var union = ga.Count + gb.Count - inter;
+        return union == 0 ? 0 : (double)inter / union;
+    }
+
+    private static bool KeywordMatches(string normalizedMessage, string keyword)
+    {
+        var kn = Normalize(keyword);
+        if (string.IsNullOrEmpty(kn)) return false;
+        if (normalizedMessage.Contains(kn)) return true;
+        foreach (var (key, alts) in Synonyms)
+        {
+            var group = new List<string> { key };
+            group.AddRange(alts);
+            var knorms = group.Select(Normalize).ToList();
+            if (!knorms.Any(g => g == kn || kn.Contains(g) || g.Contains(kn))) continue;
+            if (knorms.Any(g => normalizedMessage.Contains(g))) return true;
+        }
+        return false;
+    }
+
+    private static HashSet<string> ExpandSynonyms(string normalized)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal) { normalized };
+        foreach (var (key, alts) in Synonyms)
+        {
+            if (!normalized.Contains(key) && alts.All(a => !normalized.Contains(a))) continue;
+            set.Add(key);
+            foreach (var a in alts) set.Add(a);
+        }
+        return set;
+    }
+
+    private static readonly Dictionary<string, string[]> Synonyms = new(StringComparer.Ordinal)
+    {
+        ["取消"] = ["退订", "不住了", "不去了"],
+        ["到账"] = ["退款进度", "钱没到", "还没收到"],
+        ["没房"] = ["无房", "无法入住", "到店"],
+        ["航班"] = ["不可抗力", "证明", "疾病"],
+        ["改期"] = ["改日期", "订错", "改房型"],
+        ["跨境"] = ["海外", "代理", "责任链"],
+        ["团体"] = ["八间", "部分取消", "发票"],
+    };
 
     private sealed record PolicyCorpusItem(
         string PolicyId,

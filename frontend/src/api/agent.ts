@@ -36,6 +36,74 @@ export async function runAgentMessage(payload: Record<string, unknown>) {
   return data
 }
 
+export type AgentStreamHandlers = {
+  onStep?: (text: string, data?: unknown) => void
+  onTool?: (name: string) => void
+  onReplyDelta?: (chunk: string) => void
+  onApproval?: (sessionId: string | null | undefined, data?: unknown) => void
+  onError?: (message: string) => void
+}
+
+/** SSE progressive message; resolves with final decision from `done` event. */
+export async function runAgentMessageStream(
+  payload: Record<string, unknown>,
+  handlers: AgentStreamHandlers = {},
+): Promise<AgentDecision> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' }
+  if (apiKey) headers['X-Api-Key'] = apiKey
+  const base = import.meta.env.VITE_API_BASE_URL || ''
+  const res = await fetch(`${base}/api/agent/message/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok || !res.body) {
+    throw new Error(`stream failed: ${res.status}`)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalDecision: AgentDecision | null = null
+  let eventName = 'message'
+
+  const consumeBlock = (block: string) => {
+    const lines = block.split('\n')
+    let dataLine = ''
+    for (const line of lines) {
+      if (line.startsWith('event:')) eventName = line.slice(6).trim()
+      if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+    }
+    if (!dataLine) return
+    let parsed: { type?: string; text?: string; data?: unknown }
+    try {
+      parsed = JSON.parse(dataLine)
+    } catch {
+      return
+    }
+    const type = parsed.type || eventName
+    if (type === 'step') handlers.onStep?.(parsed.text || '', parsed.data)
+    else if (type === 'tool') handlers.onTool?.(parsed.text || '')
+    else if (type === 'reply_delta') handlers.onReplyDelta?.(parsed.text || '')
+    else if (type === 'approval_required') handlers.onApproval?.(parsed.text, parsed.data)
+    else if (type === 'error') handlers.onError?.(parsed.text || 'stream error')
+    else if (type === 'done' && parsed.data) finalDecision = parsed.data as AgentDecision
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const parts = buffer.split('\n\n')
+    buffer = parts.pop() || ''
+    for (const part of parts) consumeBlock(part)
+  }
+  if (buffer.trim()) consumeBlock(buffer)
+
+  if (!finalDecision) throw new Error('stream ended without decision')
+  return finalDecision
+}
+
 export async function respondToApproval(payload: {
   sessionId: string
   requestId: string

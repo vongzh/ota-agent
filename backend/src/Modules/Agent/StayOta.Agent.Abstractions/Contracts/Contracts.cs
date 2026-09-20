@@ -14,7 +14,9 @@ public sealed record AgentMessageRequest(
     bool ConfirmWrite = false,
     string? ConfirmationToken = null,
     string? IdempotencyKey = null,
-    bool ResetDemo = false);
+    bool ResetDemo = false,
+    /// <summary>Resume ChatClientAgent session across turns when set.</summary>
+    string? AgentSessionId = null);
 
 public sealed record DecisionStepDto(string Step, string Status, string Detail, double? Score = null);
 
@@ -87,7 +89,11 @@ public interface IAgentOrchestrator
 {
     Task<AgentDecisionDto> HandleAsync(AgentMessageRequest request, CancellationToken ct = default);
     Task<AgentDecisionDto> RespondToApprovalAsync(FunctionApprovalRequest request, CancellationToken ct = default);
+    IAsyncEnumerable<AgentStreamEvent> HandleStreamAsync(AgentMessageRequest request, CancellationToken ct = default);
 }
+
+/// <summary>SSE / progressive agent events for streaming UX.</summary>
+public sealed record AgentStreamEvent(string Type, string? Text = null, object? Data = null);
 
 public sealed record HotelOrderDto(
     string OrderId,
@@ -113,7 +119,17 @@ public sealed record ScenarioDto(
     string ExpectedRoute,
     IReadOnlyList<string> RequiredTools);
 
-public sealed record EvalCaseDto(string Id, string Message, string ExpectedScenario, string RiskLevel);
+public sealed record EvalCaseDto(
+    string Id,
+    string Message,
+    string ExpectedScenario,
+    string RiskLevel,
+    IReadOnlyList<string>? ExpectedToolsSubsequence = null,
+    IReadOnlyList<string>? ForbiddenReplySubstrings = null,
+    string? ExpectedAction = null,
+    decimal? MinRefundAmount = null,
+    decimal? MaxFeeAmount = null);
+
 public sealed record EvalResultDto(string Id, string Message, string ExpectedScenario, string ActualScenario, bool Passed, string? Detail);
 
 public sealed record ConfirmActionRequest(string CaseId, string OrderId, int OrderVersion, string Action, string IdempotencyKey);
@@ -193,7 +209,17 @@ public interface IConfirmationStore
 
 public interface IIdempotencyStore
 {
+    /// <summary>Reserve the idempotency key for an in-flight write. Returns false if already reserved or completed.</summary>
     Task<bool> TryBeginAsync(string key, TimeSpan ttl, CancellationToken ct = default);
+
+    /// <summary>Persist the successful write payload so duplicates can replay the same business result.</summary>
+    Task CompleteAsync(string key, string responseJson, TimeSpan ttl, CancellationToken ct = default);
+
+    /// <summary>Return completed response JSON, or null if missing / still in-flight.</summary>
+    Task<string?> TryGetCompletedAsync(string key, CancellationToken ct = default);
+
+    /// <summary>Release a begun key after a failed attempt so a retry can re-acquire.</summary>
+    Task AbandonAsync(string key, CancellationToken ct = default);
 }
 
 public interface ISessionStore

@@ -10,6 +10,20 @@ public sealed class Verifier : IVerifier
         var violations = new List<string>();
         if (string.IsNullOrWhiteSpace(decision.ScenarioId))
             violations.Add("missing scenario");
+
+        // Approval continuation is a shorter turn — do not require full dialogue pipeline shape.
+        if (string.Equals(decision.Intent, "function_approval", StringComparison.Ordinal))
+        {
+            if (decision.Steps.Count < 1)
+                violations.Add("approval steps incomplete");
+            if (decision.Order.Amount < 0)
+                violations.Add("invalid order amount");
+            if (decision.RiskLevel == RiskLevel.L3 &&
+                decision.Action is "ConfirmCancel" or "AutoRefund" or "ChangeOrder")
+                violations.Add("L3 must not auto-write financial actions");
+            return new VerificationResult(violations.Count == 0, violations);
+        }
+
         if (decision.Steps.Count < 5)
             violations.Add("decision steps incomplete");
         if (decision.PolicyMatches.Count == 0)
@@ -24,6 +38,9 @@ public sealed class Verifier : IVerifier
         if (decision.Action == "ExplainProgress" &&
             decision.Reply.Contains("已到账", StringComparison.Ordinal))
             violations.Add("must not claim refunded while channel processing");
+        if (decision.AgentDriven && decision.ToolSequence.Count == 0 && !decision.HasPendingApprovals &&
+            decision.Action is "ConfirmCancel" or "ExplainProgress" or "HumanHandoff")
+            violations.Add("agent-driven turn produced no tools");
         return new VerificationResult(violations.Count == 0, violations);
     }
 

@@ -5,62 +5,24 @@ using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Domain.Entities;
+using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Refund.Services;
 
 /// <summary>
 /// A–L scenario runner built on Microsoft Agent Framework <see cref="WorkflowBuilder"/> /
 /// <see cref="InProcessExecution"/> instead of a hand-rolled FSM loop.
-/// Tool gates remain in <see cref="IToolGateway"/> via <see cref="IRefundAiToolCatalog"/>.
+/// Tool gates remain in <see cref="IToolGateway"/> via <see cref="IAgentToolCatalog"/>.
+/// Write/confirm/state classification comes from plugin-contributed <see cref="IToolPolicy"/>.
 /// </summary>
 public sealed class ScenarioWorkflow(
     IRefundDataStore store,
-    IRefundAiToolCatalog tools,
+    IAgentToolCatalog tools,
     IConfirmationStore confirmationStore,
+    IToolPolicy toolPolicy,
     IVerifier verifier,
     ILogger<ScenarioWorkflow> logger) : IScenarioWorkflow
 {
-    private static readonly Dictionary<string, string> ToolStates = new()
-    {
-        ["list_user_orders"] = "INTENT_READY",
-        ["get_order_detail"] = "ORDER_CONFIRMED",
-        ["get_policy_snapshot"] = "ORDER_CONFIRMED",
-        ["list_after_sale_events"] = "FACTS_REQUIRED",
-        ["calculate_refund_quote"] = "DECISION_READY",
-        ["validate_action_permission"] = "DECISION_READY",
-        ["submit_cancellation"] = "CONFIRMATION_REQUIRED",
-        ["get_refund_status"] = "TRACKING_REFUND",
-        ["get_payment_events"] = "TRACKING_REFUND",
-        ["schedule_deadline_action"] = "TRACKING_REFUND",
-        ["create_payment_investigation"] = "WAITING_EXTERNAL",
-        ["verify_fulfillment_issue"] = "ORDER_CONFIRMED",
-        ["get_alternative_hotels"] = "DECISION_READY",
-        ["get_guarantee_quote"] = "DECISION_READY",
-        ["reserve_mock_alternative"] = "OPTION_PRESENTED",
-        ["create_human_handoff"] = "OPTION_PRESENTED",
-        ["get_handoff_status"] = "ESCALATED",
-        ["confirm_recovery_outcome"] = "ESCALATED",
-        ["build_supplier_case_draft"] = "FACTS_REQUIRED",
-        ["create_supplier_case"] = "CONFIRMATION_REQUIRED",
-        ["get_supplier_case"] = "WAITING_EXTERNAL",
-        ["accept_supplier_offer"] = "OPTION_PRESENTED",
-        ["submit_evidence_metadata"] = "FACTS_REQUIRED",
-        ["extract_evidence_fields"] = "FACTS_REQUIRED",
-        ["create_exception_review"] = "DECISION_READY",
-        ["create_service_dispute_case"] = "DECISION_READY",
-        ["get_change_quote"] = "DECISION_READY",
-        ["submit_order_change"] = "CONFIRMATION_REQUIRED",
-        ["create_finance_case"] = "DECISION_READY",
-        ["get_responsibility_chain"] = "DECISION_READY",
-        ["get_group_order_breakdown"] = "FACTS_REQUIRED",
-        ["get_partial_cancel_quote"] = "DECISION_READY",
-    };
-
-    private static readonly HashSet<string> ConfirmTools =
-    [
-        "submit_cancellation", "reserve_mock_alternative", "accept_supplier_offer", "submit_order_change"
-    ];
-
     public async Task<WorkflowRunResultDto> RunAsync(string scenarioId, CancellationToken ct = default)
     {
         await store.EnsureSeededAsync(ct);
@@ -174,26 +136,21 @@ public sealed class ScenarioWorkflow(
 
     private async Task ExecuteToolStepAsync(ScenarioRunBag s, string toolName, int occurrence, CancellationToken ct)
     {
-        var desired = StateFor(s.ScenarioId, toolName);
+        var desired = toolPolicy.StateFor(toolName, s.ScenarioId);
         if (s.State != desired)
             s.State = Record(s.Steps, "WORKFLOW_ROUTE", "AGENT_FRAMEWORK", s.State, desired, null, new { next_tool = toolName });
 
         var args = BuildArgs(toolName, s.ScenarioId, s.Scenario, s.Order, s.Facts, s.TraceId, occurrence);
         string? token = null;
-        if (ConfirmTools.Contains(toolName))
+        if (toolPolicy.RequiresConfirmation(toolName))
         {
             token = await confirmationStore.IssueAsync(
                 s.Scenario.CaseId, s.Order.OrderId, s.Order.Version, toolName, TimeSpan.FromMinutes(10), ct);
             args["confirmation_token"] = token;
         }
 
-        var access = toolName.StartsWith("submit_") || toolName.StartsWith("create_") ||
-                     toolName.StartsWith("accept_") || toolName.StartsWith("reserve_") ||
-                     toolName.StartsWith("confirm_") || toolName.StartsWith("schedule_")
-            ? ToolAccess.Write : ToolAccess.Read;
-
         var result = await tools.InvokeAsync(new ToolCall(
-            s.TraceId, toolName, access, s.Scenario.UserId, s.Order.OrderId, s.Scenario.CaseId, s.Risk,
+            s.TraceId, toolName, toolPolicy.AccessOf(toolName), s.Scenario.UserId, s.Order.OrderId, s.Scenario.CaseId, s.Risk,
             s.State, args, token, Convert.ToString(args.GetValueOrDefault("idempotency_key")),
             s.Order.Version), ct);
 
@@ -205,19 +162,6 @@ public sealed class ScenarioWorkflow(
         var after = NextStateAfter(toolName, s.State);
         Record(s.Steps, "TOOL_EXECUTION", "AIFunction/ToolGateway", s.State, after, toolName, result.Data);
         s.State = after;
-    }
-
-    private static string StateFor(string scenarioId, string toolName)
-    {
-        var overrides = new Dictionary<(string, string), string>
-        {
-            [("C", "get_payment_events")] = "TRACKING_REFUND",
-            [("H", "create_human_handoff")] = "WAITING_EXTERNAL",
-            [("K", "create_human_handoff")] = "DECISION_READY",
-            [("E", "create_human_handoff")] = "OPTION_PRESENTED",
-            [("L", "create_human_handoff")] = "OPTION_PRESENTED",
-        };
-        return overrides.TryGetValue((scenarioId, toolName), out var st) ? st : ToolStates[toolName];
     }
 
     private static string NextStateAfter(string toolName, string current) => toolName switch

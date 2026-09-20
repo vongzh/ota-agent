@@ -49,6 +49,35 @@ public sealed class AgentController(
         }
     }
 
+    /// <summary>SSE stream: status → step/tool → reply_delta → done(decision).</summary>
+    [HttpPost("agent/message/stream")]
+    public async Task MessageStream([FromBody] AgentMessageRequest request, CancellationToken ct)
+    {
+        Response.Headers.ContentType = "text/event-stream";
+        Response.Headers.CacheControl = "no-cache";
+        Response.Headers.Connection = "keep-alive";
+
+        try
+        {
+            await foreach (var evt in orchestrator.HandleStreamAsync(request, ct))
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(evt, new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+                });
+                await Response.WriteAsync($"event: {evt.Type}\n", ct);
+                await Response.WriteAsync($"data: {json}\n\n", ct);
+                await Response.Body.FlushAsync(ct);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            var err = System.Text.Json.JsonSerializer.Serialize(new { type = "error", text = ex.Message });
+            await Response.WriteAsync("event: error\n", ct);
+            await Response.WriteAsync($"data: {err}\n\n", ct);
+        }
+    }
+
     [HttpPost("agent/approvals")]
     public async Task<ActionResult<AgentDecisionDto>> RespondToApproval(
         [FromBody] FunctionApprovalRequest request, CancellationToken ct)

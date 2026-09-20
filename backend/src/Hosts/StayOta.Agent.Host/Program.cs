@@ -5,8 +5,11 @@ using StayOta.Agent;
 using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Options;
+using StayOta.Agent.Abstractions.Plugins;
 using StayOta.Agent.Ai;
 using StayOta.Agent.Host.Security;
+using StayOta.Agent.Plugins;
+using StayOta.Agent.Plugins.Echo;
 using StayOta.Agent.Plugins.Refund;
 using StayOta.Agent.Plugins.Refund.Persistence;
 using StayOta.Agent.Plugins.Refund.Services;
@@ -33,7 +36,8 @@ if (builder.Environment.IsProduction())
 }
 
 builder.Services.AddStayOtaAgent(builder.Configuration);
-builder.Services.AddRefundPlugin(builder.Configuration);
+builder.Services.AddAgentPlugin<RefundAgentPlugin>(builder.Configuration);
+builder.Services.AddAgentPlugin<EchoAgentPlugin>(builder.Configuration);
 builder.Services.AddControllers().AddJsonOptions(o =>
 {
     o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -56,6 +60,7 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 var hosting = app.Services.GetRequiredService<IOptions<HostingOptions>>().Value;
+HostingGuards.Validate(hosting);
 
 if (!string.IsNullOrWhiteSpace(hosting.PathBase))
 {
@@ -75,8 +80,6 @@ using (var scope = app.Services.CreateScope())
 
     if (hosting.ResetDatabaseOnStartup)
     {
-        if (!hosting.DemoEnabled)
-            throw new InvalidOperationException("Hosting:ResetDatabaseOnStartup requires DemoEnabled=true");
         await db.Database.EnsureDeletedAsync();
         if (schemaSql is not null)
         {
@@ -84,11 +87,11 @@ using (var scope = app.Services.CreateScope())
             await db.Database.ExecuteSqlRawAsync($"CREATE SCHEMA IF NOT EXISTS {schemaSql}");
 #pragma warning restore EF1002
         }
-        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
     }
     else
     {
-        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
     }
 
     if (hosting.SeedOnStartup)
@@ -129,8 +132,9 @@ app.MapGet("/health", async (
     AppDbContext db,
     IConnectionMultiplexer redis,
     IToolGateway tools,
-    IRefundAiToolCatalog aiTools,
-    IRefundAgentHost agentHost,
+    IAgentToolCatalog aiTools,
+    IAgentHost agentHost,
+    IAgentPluginRegistry plugins,
     IChatClientFactory chatClientFactory,
     IOptions<AiOptions> aiOptions,
     IOptions<ProductionOptions> productionOptions,
@@ -174,7 +178,8 @@ app.MapGet("/health", async (
         ["agent"] = agentHost.Agent.Name,
         ["mcpEndpoint"] = "/mcp",
         ["authRequired"] = !string.IsNullOrWhiteSpace(opts.ApiKey),
-        ["moduleLayout"] = "StayOta.Agent + Plugins.Refund",
+        ["moduleLayout"] = "StayOta.Agent + IAgentPlugin (refund, echo)",
+        ["plugins"] = plugins.Plugins.Select(p => new { p.Id, p.DisplayName }).ToArray(),
         ["pgSchema"] = storageOptions.Value.Schema
     };
 

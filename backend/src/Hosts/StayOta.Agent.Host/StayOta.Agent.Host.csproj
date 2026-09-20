@@ -20,6 +20,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Modules\Agent\StayOta.Agent\StayOta.Agent.csproj" />
     <ProjectReference Include="..\..\Modules\Agent\StayOta.Agent.Plugins.Refund\StayOta.Agent.Plugins.Refund.csproj" />
+    <ProjectReference Include="..\..\Modules\Agent\StayOta.Agent.Plugins.Echo\StayOta.Agent.Plugins.Echo.csproj" />
   </ItemGroup>
 
 </Project>

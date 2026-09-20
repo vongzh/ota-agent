@@ -10,35 +10,45 @@ namespace StayOta.Agent.Plugins.Refund.Persistence;
 
 public sealed class RefundDataStore(AppDbContext db) : IRefundDataStore
 {
-    private static readonly object Gate = new();
-    private static bool _seeded;
+    private static readonly SemaphoreSlim SeedLock = new(1, 1);
     private static List<ToolContractDto> _contracts = [];
 
     public async Task EnsureSeededAsync(CancellationToken ct = default)
     {
         LoadContracts();
-        if (_seeded && await db.Scenarios.AnyAsync(ct)) return;
-        lock (Gate)
+        if (await db.Scenarios.AnyAsync(ct)) return;
+
+        await SeedLock.WaitAsync(ct);
+        try
         {
-            if (_seeded) return;
+            if (await db.Scenarios.AnyAsync(ct)) return;
             SeedSync();
-            _seeded = true;
         }
-        await Task.CompletedTask;
+        finally
+        {
+            SeedLock.Release();
+        }
     }
 
     public async Task ResetDemoAsync(CancellationToken ct = default)
     {
-        db.ToolAudits.RemoveRange(db.ToolAudits);
-        db.CaseEvents.RemoveRange(db.CaseEvents);
-        db.WorkflowRuns.RemoveRange(db.WorkflowRuns);
-        db.Cases.RemoveRange(db.Cases);
-        db.Orders.RemoveRange(db.Orders);
-        db.Policies.RemoveRange(db.Policies);
-        db.Scenarios.RemoveRange(db.Scenarios);
-        await db.SaveChangesAsync(ct);
-        _seeded = false;
-        await EnsureSeededAsync(ct);
+        await SeedLock.WaitAsync(ct);
+        try
+        {
+            db.ToolAudits.RemoveRange(db.ToolAudits);
+            db.CaseEvents.RemoveRange(db.CaseEvents);
+            db.WorkflowRuns.RemoveRange(db.WorkflowRuns);
+            db.Cases.RemoveRange(db.Cases);
+            db.Orders.RemoveRange(db.Orders);
+            db.Policies.RemoveRange(db.Policies);
+            db.Scenarios.RemoveRange(db.Scenarios);
+            await db.SaveChangesAsync(ct);
+            SeedSync();
+        }
+        finally
+        {
+            SeedLock.Release();
+        }
     }
 
     public ScenarioFixture GetScenario(string scenarioId) =>

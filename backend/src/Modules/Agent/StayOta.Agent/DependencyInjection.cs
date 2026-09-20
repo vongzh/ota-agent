@@ -7,16 +7,20 @@ using StackExchange.Redis;
 using StayOta.Agent.Abstractions.Ai;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Options;
+using StayOta.Agent.Abstractions.Plugins;
+using StayOta.Agent.Abstractions.Tools;
 using StayOta.Agent.Ai;
+using StayOta.Agent.Plugins;
 using StayOta.Agent.Redis;
+using StayOta.Agent.Tools;
 
 namespace StayOta.Agent;
 
 public static class StayOtaAgentServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers shared Agent runtime: options, Redis stores, chat client, conversation host.
-    /// Call <c>AddRefundPlugin</c> (or another vertical plugin) afterwards.
+    /// Registers shared Agent runtime: options, Redis stores, chat client, conversation host, tool policy composite.
+    /// Call <c>AddAgentPlugin&lt;T&gt;</c> afterwards for each vertical.
     /// </summary>
     public static IServiceCollection AddStayOtaAgent(this IServiceCollection services, IConfiguration configuration)
     {
@@ -42,26 +46,39 @@ public static class StayOtaAgentServiceCollectionExtensions
         services.AddSingleton<ISessionStore, RedisSessionStore>();
         services.AddSingleton<IAgentSessionStore, RedisAgentSessionStore>();
 
+        services.AddSingleton<IAgentPluginRegistry, AgentPluginRegistry>();
+        services.AddSingleton<IToolPolicy, CompositeToolPolicy>();
+
         services.AddSingleton<IChatClientFactory, ChatClientFactory>();
-        services.AddSingleton<IChatClient>(sp =>
+        services.AddScoped<DeterministicTurnContext>();
+        services.AddScoped<TurnHitlOptions>();
+        services.AddScoped<DeterministicRefundChatClient>();
+        services.AddScoped<IChatClient>(sp =>
         {
             var hostOpts = sp.GetRequiredService<IOptions<HostingOptions>>().Value;
-            try
+            var factory = sp.GetRequiredService<IChatClientFactory>();
+            var provider = factory.ProviderName;
+            if (provider is "openai" or "ollama")
             {
-                return sp.GetRequiredService<IChatClientFactory>().Create();
-            }
-            catch (Exception ex)
-            {
-                if (!hostOpts.AllowDeterministicFallback)
-                    throw;
+                try
+                {
+                    return factory.CreateRemote();
+                }
+                catch (Exception ex)
+                {
+                    if (!hostOpts.AllowDeterministicFallback)
+                        throw;
 
-                var logger = sp.GetService<ILoggerFactory>()?.CreateLogger("ChatClientRegistration");
-                logger?.LogWarning(ex, "Falling back to DeterministicRefundChatClient");
-                return new DeterministicRefundChatClient();
+                    var logger = sp.GetService<ILoggerFactory>()?.CreateLogger("ChatClientRegistration");
+                    logger?.LogWarning(ex, "Falling back to DeterministicRefundChatClient");
+                    return sp.GetRequiredService<DeterministicRefundChatClient>();
+                }
             }
+
+            return sp.GetRequiredService<DeterministicRefundChatClient>();
         });
 
-        services.AddScoped<IRefundAgentHost, RefundAgentHost>();
+        services.AddScoped<IAgentHost, ChatClientAgentHost>();
         services.AddScoped<IAgentConversationService, AgentConversationService>();
 
         return services;

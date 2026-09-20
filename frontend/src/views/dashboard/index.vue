@@ -3,7 +3,7 @@
     <div class="workspace-heading">
       <div>
         <h1>运营看板</h1>
-        <p>北极星、漏斗健康度与 Badcase 闭环 — 对齐 hotel / Hotel-refund 运营视图。</p>
+        <p>北极星、漏斗健康度与 Badcase 闭环 — 对齐 StayOTA 运营视图（Demo 示意）。</p>
       </div>
       <div class="heading-actions">
         <button class="ghost-btn" :disabled="wfLoading" @click="runWorkflowBatch">跑 A–L Workflow</button>

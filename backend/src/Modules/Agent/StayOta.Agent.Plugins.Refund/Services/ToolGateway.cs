@@ -3,8 +3,10 @@ using Microsoft.Extensions.Logging;
 using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Domain.Entities;
+using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Refund.Services;
+// IToolPolicy injected — plugin contributions, not static ToolPolicy.
 
 public interface IRefundDataStore
 {
@@ -36,22 +38,9 @@ public sealed class ToolGateway(
     IRefundDataStore store,
     IConfirmationStore confirmationStore,
     IIdempotencyStore idempotencyStore,
+    IToolPolicy toolPolicy,
     ILogger<ToolGateway> logger) : IToolGateway
 {
-    private static readonly HashSet<string> WriteTools =
-    [
-        "submit_cancellation", "schedule_deadline_action", "create_payment_investigation",
-        "reserve_mock_alternative", "create_human_handoff", "confirm_recovery_outcome",
-        "create_supplier_case", "accept_supplier_offer", "submit_evidence_metadata",
-        "create_exception_review", "create_service_dispute_case", "submit_order_change",
-        "create_finance_case"
-    ];
-
-    private static readonly HashSet<string> ConfirmRequired =
-    [
-        "submit_cancellation", "submit_order_change", "accept_supplier_offer", "reserve_mock_alternative"
-    ];
-
     public IReadOnlyList<ToolContractDto> ListContracts() => store.GetToolContracts();
 
     public async Task<ToolResult> InvokeAsync(ToolCall call, CancellationToken ct = default)
@@ -72,12 +61,12 @@ public sealed class ToolGateway(
                 $"tool {call.ToolName} not allowed in state {call.ConversationState}", ct);
         }
 
-        var isWrite = WriteTools.Contains(call.ToolName);
+        var isWrite = toolPolicy.IsWrite(call.ToolName);
 
         if (isWrite && call.RiskLevel == RiskLevel.L3 && call.ToolName is "submit_cancellation" or "submit_order_change")
             return await Audit(call, false, false, null, "L3 blocks auto financial write; escalate", ct);
 
-        if (isWrite && ConfirmRequired.Contains(call.ToolName))
+        if (isWrite && toolPolicy.RequiresConfirmation(call.ToolName))
         {
             if (string.IsNullOrWhiteSpace(call.ConfirmationToken) || call.ExpectedOrderVersion is null ||
                 string.IsNullOrWhiteSpace(call.OrderId) || string.IsNullOrWhiteSpace(call.CaseId))
@@ -89,14 +78,41 @@ public sealed class ToolGateway(
                 return await Audit(call, false, false, null, "invalid or expired confirmation token", ct);
         }
 
-        if (isWrite && !string.IsNullOrWhiteSpace(call.IdempotencyKey))
+        var idemTtl = TimeSpan.FromHours(24);
+        var hasIdem = isWrite && !string.IsNullOrWhiteSpace(call.IdempotencyKey);
+        if (hasIdem)
         {
-            var began = await idempotencyStore.TryBeginAsync(call.IdempotencyKey!, TimeSpan.FromHours(24), ct);
+            var began = await idempotencyStore.TryBeginAsync(call.IdempotencyKey!, idemTtl, ct);
             if (!began)
-                return await Audit(call, true, true, new { duplicate = true }, null, ct);
+            {
+                var cached = await idempotencyStore.TryGetCompletedAsync(call.IdempotencyKey!, ct);
+                if (cached is not null)
+                {
+                    object? replay;
+                    try { replay = JsonSerializer.Deserialize<JsonElement>(cached); }
+                    catch { replay = cached; }
+                    return await Audit(call, true, true, new { duplicate = true, replay }, null, ct);
+                }
+
+                return await Audit(call, true, true, new { duplicate = true, in_flight = true }, null, ct);
+            }
         }
 
-        object? data = await ExecuteTool(call, ct);
+        object? data;
+        try
+        {
+            data = await ExecuteTool(call, ct);
+        }
+        catch
+        {
+            if (hasIdem)
+                await idempotencyStore.AbandonAsync(call.IdempotencyKey!, ct);
+            throw;
+        }
+
+        if (hasIdem)
+            await idempotencyStore.CompleteAsync(call.IdempotencyKey!, JsonSerializer.Serialize(data ?? new { }), idemTtl, ct);
+
         logger.LogInformation("Tool {Tool} ok trace={Trace}", call.ToolName, call.TraceId);
         return await Audit(call, true, true, data, null, ct);
     }
@@ -144,7 +160,7 @@ public sealed class ToolGateway(
                 refund_id = $"RFD-{Guid.NewGuid():N}"[..12].ToUpperInvariant(),
                 refund_status = "REFUND_INITIATED"
             },
-            "get_action_result" => new { found = true, action_status = "SUCCEEDED", business_result = "ok" },
+            "get_action_result" => await ResolveActionResultAsync(call, ct),
             "get_refund_status" => new
             {
                 refund_id = order?.RefundId ?? "RFD-DEMO",
@@ -205,6 +221,23 @@ public sealed class ToolGateway(
             "get_partial_cancel_quote" => new { quote_id = $"PQ-{Guid.NewGuid():N}"[..10].ToUpperInvariant(), refund_amount = 3000m, cancellation_fee = 300m, discount_reallocation = 100m, invoice_impact = "need_reissue", requires_specialist = true },
             _ => new { ok = true }
         };
+    }
+
+    private async Task<object?> ResolveActionResultAsync(ToolCall call, CancellationToken ct)
+    {
+        var key = call.IdempotencyKey
+                  ?? (call.Arguments.TryGetValue("idempotency_key", out var v) ? Convert.ToString(v) : null);
+        if (string.IsNullOrWhiteSpace(key))
+            return new { found = false, action_status = "UNKNOWN", business_result = (object?)null };
+
+        var cached = await idempotencyStore.TryGetCompletedAsync(key!, ct);
+        if (cached is null)
+            return new { found = false, action_status = "IN_FLIGHT_OR_MISSING", business_result = (object?)null };
+
+        object? body;
+        try { body = JsonSerializer.Deserialize<JsonElement>(cached); }
+        catch { body = cached; }
+        return new { found = true, action_status = "SUCCEEDED", business_result = body };
     }
 
     private async Task<ToolResult> Audit(ToolCall call, bool allowed, bool success, object? data, string? deny, CancellationToken ct)

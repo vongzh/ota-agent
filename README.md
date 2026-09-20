@@ -31,9 +31,14 @@
 - Tool `allowed_conversation_states` 白名单门禁
 - Verifier 决策/工作流断言
 - 前端三页：Agent 设计 / 智能处理台 / 运营看板
-- ChatClientAgent 真正驱动对话（Deterministic / OpenAI / Ollama）
+- ChatClientAgent 真正驱动对话（Deterministic / OpenAI / Ollama）；Deterministic 可按用户话自主选 Tool
+- 多轮 Session 续跑：请求带 `agentSessionId` 即复用序列化会话
 - 官方 FunctionApproval 流（待批 UI + `/api/agent/approvals`）
 - MCP 暴露 `/mcp` + 生产直连 `Mock|Http|Mcp`
+- 离线 Eval 支持工具子序列 / 动作 / 金额 / 禁语断言
+- Tool 失败重规划（门禁拒绝后回退候选 Tool）
+- 流式对话：`POST /api/agent/message/stream`（SSE：step / tool / reply_delta / done）
+- 政策检索：同义词 + 字符 bigram 相似 + 成交快照加权
 
 ## 启动
 
@@ -56,8 +61,17 @@ npm install && npm run dev
 
 ```bash
 cd backend && dotnet test StayOta.Agent.slnx
+# CI 同等：设置 STAYOTA_AGENT_ROOT 指向仓库根，加载 contracts/mock/eval
 curl -X POST http://127.0.0.1:5088/api/eval/run
 curl -X POST http://127.0.0.1:5088/api/workflows/run-all
+```
+
+GitHub Actions：`.github/workflows/ci.yml`（`dotnet test` + `frontend` build）。
+
+可选容器（依赖 compose profile）：
+
+```bash
+docker compose --profile app up --build
 ```
 
 ## Production 配置
@@ -66,12 +80,12 @@ curl -X POST http://127.0.0.1:5088/api/workflows/run-all
 export ASPNETCORE_ENVIRONMENT=Production
 export ConnectionStrings__Postgres='...'
 export ConnectionStrings__Redis='...'
-export Hosting__ApiKey='...'
+export Hosting__ApiKey='...'   # DemoEnabled=false 时必填，否则启动失败
 export Production__Mode=Http
 export Production__BaseUrl='https://orders.internal/'
 ```
 
-- `DemoEnabled=false`：禁止启动删库、`ResetDemo`、Eval/Workflow 演示端、开放确认签发
+- `DemoEnabled=false`：禁止启动删库、`ResetDemo`、Eval/Workflow 演示端、开放确认签发；**且必须配置 `Hosting:ApiKey`**
 - Http/Mcp：**不**静默回退 Mock；AI 失败不静默降级 Deterministic（除非显式允许）
 
 与主站订单/鉴权等系统对接时，可参考可选说明 [`docs/STAYOTA-INTEGRATION.md`](./docs/STAYOTA-INTEGRATION.md)（非本仓运行前置依赖）。

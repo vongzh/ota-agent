@@ -10,8 +10,11 @@ namespace StayOta.Agent.Ai;
 
 public interface IChatClientFactory
 {
-    IChatClient Create();
+    /// <summary>Normalized provider id: openai | ollama | deterministic.</summary>
     string ProviderName { get; }
+
+    /// <summary>Creates a remote LLM client. Deterministic is resolved from DI instead.</summary>
+    IChatClient CreateRemote();
 }
 
 public sealed class ChatClientFactory(
@@ -20,17 +23,18 @@ public sealed class ChatClientFactory(
 {
     public string ProviderName => ResolveProvider();
 
-    public IChatClient Create()
+    public IChatClient CreateRemote()
     {
         var opts = options.Value;
         var provider = ResolveProvider();
-        logger.LogInformation("Creating IChatClient provider={Provider}", provider);
+        logger.LogInformation("Creating remote IChatClient provider={Provider}", provider);
 
         return provider switch
         {
             "openai" => CreateOpenAi(opts.OpenAI),
             "ollama" => CreateOllama(opts.Ollama),
-            _ => new DeterministicRefundChatClient()
+            _ => throw new InvalidOperationException(
+                $"Provider '{provider}' is not a remote LLM; resolve DeterministicRefundChatClient from DI")
         };
     }
 

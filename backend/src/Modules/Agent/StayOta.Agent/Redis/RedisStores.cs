@@ -35,11 +35,51 @@ public sealed class RedisConfirmationStore(IConnectionMultiplexer mux) : IConfir
 
 public sealed class RedisIdempotencyStore(IConnectionMultiplexer mux) : IIdempotencyStore
 {
+    private const string PendingMarker = "{\"s\":\"pending\"}";
+
     public async Task<bool> TryBeginAsync(string key, TimeSpan ttl, CancellationToken ct = default)
     {
         var db = mux.GetDatabase();
-        return await db.StringSetAsync($"refund:idem:{key}", "1", ttl, When.NotExists);
+        return await db.StringSetAsync(RedisKey(key), PendingMarker, ttl, When.NotExists);
     }
+
+    public async Task CompleteAsync(string key, string responseJson, TimeSpan ttl, CancellationToken ct = default)
+    {
+        var db = mux.GetDatabase();
+        var wrapped = $"{{\"s\":\"ok\",\"d\":{responseJson}}}";
+        await db.StringSetAsync(RedisKey(key), wrapped, ttl);
+    }
+
+    public async Task<string?> TryGetCompletedAsync(string key, CancellationToken ct = default)
+    {
+        var db = mux.GetDatabase();
+        var value = await db.StringGetAsync(RedisKey(key));
+        if (value.IsNullOrEmpty) return null;
+        var text = value.ToString();
+        if (text.StartsWith("{\"s\":\"ok\"", StringComparison.Ordinal))
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            if (doc.RootElement.TryGetProperty("d", out var d))
+                return d.GetRawText();
+        }
+
+        // Legacy marker "1" or pending — no replayable body.
+        return null;
+    }
+
+    public async Task AbandonAsync(string key, CancellationToken ct = default)
+    {
+        var db = mux.GetDatabase();
+        var redisKey = RedisKey(key);
+        var value = await db.StringGetAsync(redisKey);
+        if (value.IsNullOrEmpty) return;
+        var text = value.ToString();
+        // Only drop in-flight / legacy markers — never erase a completed payload.
+        if (text == PendingMarker || text == "1")
+            await db.KeyDeleteAsync(redisKey);
+    }
+
+    private static string RedisKey(string key) => $"refund:idem:{key}";
 }
 
 public sealed class RedisSessionStore(IConnectionMultiplexer mux) : ISessionStore

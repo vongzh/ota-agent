@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -18,6 +19,8 @@
     <ProjectReference Include="..\..\src\Modules\Agent\StayOta.Agent.Abstractions\StayOta.Agent.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Modules\Agent\StayOta.Agent\StayOta.Agent.csproj" />
     <ProjectReference Include="..\..\src\Modules\Agent\StayOta.Agent.Plugins.Refund\StayOta.Agent.Plugins.Refund.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Agent\StayOta.Agent.Plugins.Echo\StayOta.Agent.Plugins.Echo.csproj" />
+    <ProjectReference Include="..\..\src\Hosts\StayOta.Agent.Host\StayOta.Agent.Host.csproj" />
   </ItemGroup>
 
 </Project>

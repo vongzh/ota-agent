@@ -1,18 +1,14 @@
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace StayOta.Agent.Ai;
 
 /// <summary>
-/// Offline / demo <see cref="IChatClient"/> that drives tool calling without a remote LLM.
-/// Swap this registration for Azure OpenAI / Foundry clients when going live.
+/// Offline / demo <see cref="IChatClient"/>. Turn plan comes from scoped
+/// <see cref="DeterministicTurnContext"/> — no static AsyncLocal plan bus.
 /// </summary>
-public sealed class DeterministicRefundChatClient : IChatClient
+public sealed class DeterministicRefundChatClient(DeterministicTurnContext turnContext) : IChatClient
 {
-    public static AsyncLocal<IReadOnlyList<string>?> PlannedTools { get; } = new();
-    public static AsyncLocal<string?> FinalReply { get; } = new();
-
     public ChatClientMetadata Metadata { get; } = new("deterministic", new Uri("local://stayota-refund-agent"));
 
     public void Dispose()
@@ -34,7 +30,6 @@ public sealed class DeterministicRefundChatClient : IChatClient
         var list = messages.ToList();
         var completed = list.SelectMany(m => m.Contents).OfType<FunctionResultContent>()
             .Select(f => f.CallId).ToHashSet(StringComparer.Ordinal);
-        var planned = PlannedTools.Value ?? [];
         var tools = options?.Tools?.OfType<AIFunction>()
                         .GroupBy(t => t.Name, StringComparer.Ordinal)
                         .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal)
@@ -42,8 +37,11 @@ public sealed class DeterministicRefundChatClient : IChatClient
         var toolNames = options?.Tools?
             .Select(t => t.Name)
             .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Cast<string>()
             .ToHashSet(StringComparer.Ordinal)
             ?? new HashSet<string>(StringComparer.Ordinal);
+
+        var planned = ResolvePlannedTools(toolNames);
 
         foreach (var toolName in planned)
         {
@@ -59,10 +57,43 @@ public sealed class DeterministicRefundChatClient : IChatClient
             ]));
         }
 
-        var reply = FinalReply.Value ?? "退款助手已完成本轮决策（确定性 ChatClient，可替换为 Azure OpenAI / Foundry）。";
+        var reply = turnContext.Plan?.SuggestedReply
+                    ?? "退款助手已完成本轮决策（确定性 ChatClient，可替换为 Azure OpenAI / Foundry）。";
         return Task.FromResult(new ChatResponse([
             new ChatMessage(ChatRole.Assistant, reply)
         ]));
+    }
+
+    private IReadOnlyList<string> ResolvePlannedTools(IReadOnlyCollection<string> available)
+    {
+        var plan = turnContext.Plan;
+        if (plan is null) return [];
+
+        var planned = new List<string>();
+
+        // Soft hints from scenario fixture (executed by Agent → Gateway, not Orchestrator)
+        if (plan.HintTools is { Count: > 0 })
+        {
+            planned.AddRange(plan.HintTools.Where(available.Contains).Distinct(StringComparer.Ordinal));
+        }
+        else if (plan.AllowAutonomousToolSelection)
+        {
+            planned.AddRange(ToolIntentPlanner.Select(
+                plan.UserMessage,
+                plan.ConversationState,
+                available,
+                preferredWriteTool: null));
+        }
+
+        // Append preferred write last so ApprovalRequiredAIFunction can surface HITL after reads.
+        if (!string.IsNullOrWhiteSpace(plan.PreferredWriteTool) &&
+            available.Contains(plan.PreferredWriteTool!) &&
+            !planned.Contains(plan.PreferredWriteTool!, StringComparer.Ordinal))
+        {
+            planned.Add(plan.PreferredWriteTool!);
+        }
+
+        return planned.Take(8).ToList();
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

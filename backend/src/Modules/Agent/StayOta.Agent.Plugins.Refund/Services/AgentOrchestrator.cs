@@ -5,22 +5,27 @@ using StayOta.Agent.Abstractions.Contracts;
 using StayOta.Agent.Abstractions.Domain;
 using StayOta.Agent.Abstractions.Domain.Entities;
 using StayOta.Agent.Abstractions.Options;
+using StayOta.Agent.Abstractions.Tools;
 
 namespace StayOta.Agent.Plugins.Refund.Services;
 
+/// <summary>
+/// Thin orchestrator: route → intent → policy → rules → assemble context.
+/// Tool selection and execution belong to Agent → ToolGateway (sole execution surface).
+/// </summary>
 public sealed class AgentOrchestrator(
     IRefundDataStore store,
     IIntentService intentService,
     IPolicyRetrieval retrieval,
     IRulesEngine rules,
-    IRefundAiToolCatalog tools,
-    IRefundAgentHost agentHost,
+    IAgentHost agentHost,
     IAgentConversationService conversation,
     IAgentSessionStore agentSessionStore,
     IConfirmationStore confirmationStore,
     ISessionStore sessionStore,
     IVerifier verifier,
     IProductionOrderClient production,
+    IToolPolicy toolPolicy,
     Microsoft.Extensions.Options.IOptions<HostingOptions> hostingOptions,
     ILogger<AgentOrchestrator> logger) : IAgentOrchestrator
 {
@@ -61,12 +66,9 @@ public sealed class AgentOrchestrator(
         var missing = (signals.HasEvidence || !NeedsEvidence(scenario.ScenarioId, signals)) ? 0 : 1;
         steps.Add(new("槽位提取", missing > 0 ? "warning" : "success", missing > 0 ? $"缺失 {missing} 项" : "槽位完整"));
 
-        await tools.InvokeAsync(Read(traceId, "list_user_orders", userId, order, scenario, "INTENT_READY"), ct);
-        var orderTool = await tools.InvokeAsync(Read(traceId, "get_order_detail", userId, order, scenario, "ORDER_CONFIRMED"), ct);
-        steps.Add(new("订单查询", orderTool.Allowed ? "success" : "error", $"status={order.Status}, on_site={order.UserOnSite}, source={production.Mode}"));
+        steps.Add(new("订单查询", "success", $"status={order.Status}, on_site={order.UserOnSite}, source={production.Mode}"));
 
         var matches = retrieval.Retrieve(order, policy, analyzed.Reason);
-        await tools.InvokeAsync(Read(traceId, "get_policy_snapshot", userId, order, scenario, "ORDER_CONFIRMED"), ct);
         steps.Add(new("政策检索", "success", $"{matches[0].PolicyId} · score={matches[0].Score:0.00}"));
 
         var decision = rules.Evaluate(order, policy, scenario, signals);
@@ -74,11 +76,10 @@ public sealed class AgentOrchestrator(
         steps.Add(new("风险判断", "success", $"{decision.RiskLevel} · {decision.RiskScore}"));
 
         var requiredTools = JsonSerializer.Deserialize<List<string>>(scenario.RequiredToolsJson) ?? [];
-        var executed = new List<string>();
-        string? confirmationToken = null;
         var writeToolName = scenario.ScenarioId == "I" ? "submit_order_change" : "submit_cancellation";
         var deferWriteToFunctionApproval = decision.NeedsUserConfirm && !request.ConfirmWrite;
 
+        string? confirmationToken = null;
         if (decision.NeedsUserConfirm)
         {
             confirmationToken = await confirmationStore.IssueAsync(
@@ -87,84 +88,13 @@ public sealed class AgentOrchestrator(
                 TimeSpan.FromMinutes(10), ct);
         }
 
-        foreach (var toolName in requiredTools.Distinct())
-        {
-            var access = ToolGatewayWrite(toolName) ? ToolAccess.Write : ToolAccess.Read;
-            var args = new Dictionary<string, object?>
-            {
-                ["refund"] = decision.RefundAmount,
-                ["fee"] = decision.FeeAmount,
-                ["summary"] = decision.Conclusion,
-                ["reason"] = analyzed.Reason
-            };
-
-            string? token = null;
-            string? idem = null;
-            int? version = null;
-            if (toolName is "submit_cancellation" or "submit_order_change" or "accept_supplier_offer" or "reserve_mock_alternative")
-            {
-                // Defer confirm-required writes to official FunctionApproval when not yet confirmed.
-                if (deferWriteToFunctionApproval) continue;
-                if (!(request.ConfirmWrite && confirmationToken is not null)) continue;
-                token = request.ConfirmationToken ?? confirmationToken;
-                idem = request.IdempotencyKey ?? $"idem-{scenario.ScenarioId}-{order.OrderId}-{toolName}";
-                version = order.Version;
-            }
-
-            if (toolName is "submit_evidence_metadata" or "extract_evidence_fields" or "create_exception_review")
-            {
-                if (!signals.HasEvidence) continue;
-            }
-            if (toolName is "create_supplier_case" or "get_supplier_case" or "accept_supplier_offer")
-            {
-                if (decision.Action is "RequestInformation" or "RequestEvidence") continue;
-            }
-
-            var toolState = ToolStates.GetValueOrDefault(toolName, "DECISION_READY");
-            if (scenario.ScenarioId == "H" && toolName == "create_human_handoff") toolState = "WAITING_EXTERNAL";
-            if (scenario.ScenarioId == "K" && toolName == "create_human_handoff") toolState = "DECISION_READY";
-            if ((scenario.ScenarioId is "E" or "L" or "D") && toolName == "create_human_handoff") toolState = "OPTION_PRESENTED";
-
-            var result = await tools.InvokeAsync(new ToolCall(
-                traceId, toolName, access, userId, order.OrderId, scenario.CaseId, decision.RiskLevel,
-                toolState, args, token, idem, version), ct);
-            if (result.Allowed) executed.Add(toolName);
-        }
-
-        await tools.InvokeAsync(new ToolCall(traceId, "calculate_refund_quote", ToolAccess.Read, userId, order.OrderId, scenario.CaseId, decision.RiskLevel, "DECISION_READY",
-            new Dictionary<string, object?> { ["refund"] = decision.RefundAmount, ["fee"] = decision.FeeAmount }), ct);
-        await tools.InvokeAsync(new ToolCall(traceId, "validate_action_permission", ToolAccess.Read, userId, order.OrderId, scenario.CaseId, decision.RiskLevel, "DECISION_READY",
-            new Dictionary<string, object?> { ["action"] = decision.Action }), ct);
-
-        if (decision.Action is "HumanHandoff" or "Recovery" or "FinanceReview" or "ServiceDispute" or "SpecialReview")
-        {
-            var handoff = await tools.InvokeAsync(new ToolCall(traceId, "create_human_handoff", ToolAccess.Write, userId, order.OrderId, scenario.CaseId, decision.RiskLevel, scenario.ScenarioId switch { "H" => "WAITING_EXTERNAL", "K" => "DECISION_READY", _ => "OPTION_PRESENTED" },
-                new Dictionary<string, object?> { ["summary"] = decision.Conclusion }, IdempotencyKey: $"ho-{scenario.ScenarioId}-{runId}"), ct);
-            if (handoff.Allowed) executed.Add("create_human_handoff");
-        }
-        if (decision.Action == "NegotiateWithHotel")
-        {
-            await tools.InvokeAsync(Read(traceId, "build_supplier_case_draft", userId, order, scenario, "FACTS_REQUIRED"), ct);
-            await tools.InvokeAsync(new ToolCall(traceId, "create_supplier_case", ToolAccess.Write, userId, order.OrderId, scenario.CaseId, decision.RiskLevel, "CONFIRMATION_REQUIRED",
-                new Dictionary<string, object?>(), IdempotencyKey: $"sup-{scenario.ScenarioId}-{runId}"), ct);
-            executed.Add("create_supplier_case");
-        }
-        if (decision.Action == "ExplainProgress")
-        {
-            await tools.InvokeAsync(Read(traceId, "get_refund_status", userId, order, scenario, "TRACKING_REFUND"), ct);
-            await tools.InvokeAsync(new ToolCall(traceId, "schedule_deadline_action", ToolAccess.Write, userId, order.OrderId, scenario.CaseId, decision.RiskLevel, "TRACKING_REFUND",
-                new Dictionary<string, object?>(), IdempotencyKey: $"sch-{scenario.ScenarioId}-{runId}"), ct);
-        }
-        if ((decision.Action is "Recovery" or "HumanHandoff") && scenario.ScenarioId is "D" or "E")
-        {
-            await tools.InvokeAsync(Read(traceId, "verify_fulfillment_issue", userId, order, scenario, "DECISION_READY"), ct);
-            await tools.InvokeAsync(Read(traceId, "get_alternative_hotels", userId, order, scenario, "DECISION_READY"), ct);
-        }
-        if (signals.HasEvidence && scenario.ScenarioId is "G" or "F" or "H")
-        {
-            await tools.InvokeAsync(new ToolCall(traceId, "submit_evidence_metadata", ToolAccess.Write, userId, order.OrderId, scenario.CaseId, decision.RiskLevel, "FACTS_REQUIRED",
-                new Dictionary<string, object?> { ["evidence_type"] = "flight_cancel" }, IdempotencyKey: $"ev-{runId}"), ct);
-        }
+        // Soft hints — Agent executes via Gateway (sole surface).
+        // ConfirmWrite: include confirm tools so Agent runs them with ambient token (no Orchestrator bypass).
+        // Else: strip confirm tools; PreferredWriteTool triggers FunctionApproval.
+        var hintTools = requiredTools
+            .Where(t => request.ConfirmWrite || !toolPolicy.RequiresConfirmation(t))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
         steps.Add(new("处理动作", "active", decision.Action));
 
@@ -207,13 +137,6 @@ public sealed class AgentOrchestrator(
             ["action"] = decision.Action
         };
 
-        // Drive ChatClientAgent: dialogue + official FunctionApproval for confirm-required writes.
-        var plannedForAgent = new List<string>();
-        if (deferWriteToFunctionApproval)
-            plannedForAgent.Add(writeToolName);
-        else if (executed.Count > 0)
-            plannedForAgent.AddRange(executed.Take(2));
-
         var agentTurn = await conversation.RunTurnAsync(new AgentTurnRequest(
             request.Message,
             traceId,
@@ -223,26 +146,25 @@ public sealed class AgentOrchestrator(
             scenario.ScenarioId,
             decision.RiskLevel,
             decision.ConversationState,
-            plannedForAgent,
+            hintTools,
             suggestedReply,
             deferWriteToFunctionApproval,
             deferWriteToFunctionApproval ? writeToolName : null,
             ambient,
             confirmationToken,
-            request.IdempotencyKey ?? (deferWriteToFunctionApproval ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
-            deferWriteToFunctionApproval ? order.Version : null), ct);
+            request.IdempotencyKey ?? (decision.NeedsUserConfirm ? $"idem-{scenario.ScenarioId}-{order.OrderId}-{writeToolName}" : null),
+            decision.NeedsUserConfirm ? order.Version : null,
+            request.AgentSessionId,
+            AllowAutonomousToolSelection: hintTools.Count == 0), ct);
 
         steps.Add(new(
             "Agent 驱动",
             agentTurn.AgentDriven ? "success" : "warning",
             agentTurn.HasPendingApprovals
-                ? $"FunctionApproval 待批 ×{agentTurn.PendingApprovals.Count}"
-                : $"provider={agentHost.ProviderName}, tools={string.Join(',', agentTurn.ToolsInvoked)}"));
+                ? $"FunctionApproval 待批 ×{agentTurn.PendingApprovals.Count}; session={agentTurn.SessionId}"
+                : $"provider={agentHost.ProviderName}, tools={string.Join(',', agentTurn.ToolsInvoked)}, session={agentTurn.SessionId}"));
 
-        foreach (var t in agentTurn.ToolsInvoked)
-        {
-            if (!executed.Contains(t)) executed.Add(t);
-        }
+        var executed = agentTurn.ToolsInvoked.ToList();
 
         var pendingApprovals = agentTurn.PendingApprovals
             .Select(p => new PendingApprovalDto(p.RequestId, p.CallId, p.ToolName, p.Arguments, p.Description))
@@ -271,7 +193,8 @@ public sealed class AgentOrchestrator(
             executed,
             confirmationToken,
             agentSessionId = agentTurn.SessionId,
-            pendingApprovals = pendingApprovals.Select(p => p.ToolName)
+            pendingApprovals = pendingApprovals.Select(p => p.ToolName),
+            hintTools
         }, ct);
 
         var run = new WorkflowRun
@@ -292,9 +215,9 @@ public sealed class AgentOrchestrator(
             TimeSpan.FromHours(6), ct);
 
         logger.LogInformation(
-            "Scenario {Scenario} action {Action} aiProvider={Provider} agentDriven={Driven} pendingApprovals={Pending} production={Mode}",
+            "Scenario {Scenario} action {Action} aiProvider={Provider} agentDriven={Driven} pendingApprovals={Pending} production={Mode} hints={Hints}",
             scenario.ScenarioId, decision.Action, agentHost.ProviderName, agentTurn.AgentDriven,
-            pendingApprovals.Count, production.Mode);
+            pendingApprovals.Count, production.Mode, hintTools.Count);
 
         var dto = new AgentDecisionDto(
             traceId, runId, scenario.CaseId, scenario.ScenarioId,
@@ -327,12 +250,22 @@ public sealed class AgentOrchestrator(
             .Select(p => new PendingApprovalDto(p.RequestId, p.CallId, p.ToolName, p.Arguments, p.Description))
             .ToList();
 
+        decimal? refund = AmbientDec(snapshot, "refund");
+        decimal? fee = AmbientDec(snapshot, "fee");
+        var action = request.Approved ? "WriteApproved" : "WriteRejected";
+        var caseStatus = request.Approved
+            ? (pending.Count > 0 ? "WAITING_APPROVAL" : "REFUND_INITIATED")
+            : "AWAITING_USER";
+        var runId = $"apr_{Guid.NewGuid():N}"[..16];
+        var scenarioId = string.IsNullOrWhiteSpace(snapshot.ScenarioId) ? "A" : snapshot.ScenarioId;
+
         await store.AppendEventAsync(snapshot.CaseId, "function_approval", new
         {
             request.RequestId,
             request.Approved,
             request.Reason,
-            tools = agentTurn.ToolsInvoked
+            tools = agentTurn.ToolsInvoked,
+            pending = pending.Select(p => p.ToolName)
         }, ct);
 
         var steps = new List<DecisionStepDto>
@@ -345,23 +278,51 @@ public sealed class AgentOrchestrator(
                     : string.Join(',', agentTurn.ToolsInvoked))
         };
 
+        await store.UpsertCaseAsync(new RefundCase
+        {
+            CaseId = snapshot.CaseId,
+            OrderId = order.OrderId,
+            UserId = snapshot.UserId,
+            ScenarioId = scenarioId,
+            Status = caseStatus,
+            RiskLevel = risk,
+            Intent = "function_approval",
+            RecommendedAction = action,
+            QuoteRefundAmount = refund,
+            QuoteFeeAmount = fee,
+            ConversationState = snapshot.ConversationState,
+            UpdatedAt = DateTimeOffset.UtcNow
+        }, ct);
+
+        await store.SaveWorkflowRunAsync(new WorkflowRun
+        {
+            RunId = runId,
+            CaseId = snapshot.CaseId,
+            ScenarioId = scenarioId,
+            Status = agentTurn.HasPendingApprovals ? "WAITING_APPROVAL" : (request.Approved ? "COMPLETED" : "REJECTED"),
+            TraceJson = JsonSerializer.Serialize(steps),
+            ToolSequenceJson = JsonSerializer.Serialize(agentTurn.ToolsInvoked),
+            StartedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow
+        }, ct);
+
         var dto = new AgentDecisionDto(
             snapshot.TraceId,
-            $"apr_{Guid.NewGuid():N}"[..16],
+            runId,
             snapshot.CaseId,
-            string.IsNullOrWhiteSpace(snapshot.ScenarioId) ? "A" : snapshot.ScenarioId,
+            scenarioId,
             "function_approval",
             1.0,
             risk,
             risk == RiskLevel.L3 ? 90 : 40,
-            request.Approved ? "WriteApproved" : "WriteRejected",
+            action,
             agentTurn.Reply,
             request.Approved ? "写操作已批准" : "写操作已拒绝",
             agentTurn.Reply,
-            null, null,
+            refund, fee,
             agentTurn.Reply,
             snapshot.ConversationState,
-            request.Approved ? "REFUND_INITIATED" : "AWAITING_USER",
+            caseStatus,
             steps,
             new Dictionary<string, string>(),
             [],
@@ -369,7 +330,7 @@ public sealed class AgentOrchestrator(
             null,
             new HotelOrderDto(order.OrderId, order.HotelName, order.CheckIn, order.CheckOut, order.PaidAmount, order.Currency,
                 order.Status, order.UserOnSite, order.PolicyId, order.Version, order.RoomType, order.RoomCount),
-            true, Array.Empty<string>(),
+            false, Array.Empty<string>(),
             pending.Count > 0
                 ? new HitlStateDto(true, pending[0].ToolName, snapshot.ConfirmationToken,
                     "FunctionApproval (ToolApprovalRequestContent)")
@@ -381,7 +342,15 @@ public sealed class AgentOrchestrator(
             pending,
             production.Mode);
 
-        return dto;
+        var verification = verifier.VerifyDecision(dto);
+        return dto with { VerificationPassed = verification.Passed, VerificationViolations = verification.Violations };
+    }
+
+    private static decimal? AmbientDec(AgentSessionSnapshot snapshot, string key)
+    {
+        if (!snapshot.AmbientArguments.TryGetValue(key, out var v) || v is null) return null;
+        try { return Convert.ToDecimal(v); }
+        catch { return null; }
     }
 
     private static IReadOnlyList<TicketLifecycleStepDto> BuildTicketLifecycle(string action, RiskLevel risk, string caseStatus)
@@ -398,51 +367,64 @@ public sealed class AgentOrchestrator(
         ];
     }
 
-    private static readonly Dictionary<string, string> ToolStates = new()
+    public async IAsyncEnumerable<AgentStreamEvent> HandleStreamAsync(
+        AgentMessageRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        ["list_user_orders"] = "INTENT_READY",
-        ["get_order_detail"] = "ORDER_CONFIRMED",
-        ["get_policy_snapshot"] = "ORDER_CONFIRMED",
-        ["list_after_sale_events"] = "FACTS_REQUIRED",
-        ["calculate_refund_quote"] = "DECISION_READY",
-        ["validate_action_permission"] = "DECISION_READY",
-        ["submit_cancellation"] = "CONFIRMATION_REQUIRED",
-        ["get_refund_status"] = "TRACKING_REFUND",
-        ["get_payment_events"] = "TRACKING_REFUND",
-        ["schedule_deadline_action"] = "TRACKING_REFUND",
-        ["create_payment_investigation"] = "WAITING_EXTERNAL",
-        ["verify_fulfillment_issue"] = "ORDER_CONFIRMED",
-        ["get_alternative_hotels"] = "DECISION_READY",
-        ["get_guarantee_quote"] = "DECISION_READY",
-        ["create_human_handoff"] = "OPTION_PRESENTED",
-        ["build_supplier_case_draft"] = "FACTS_REQUIRED",
-        ["create_supplier_case"] = "CONFIRMATION_REQUIRED",
-        ["submit_evidence_metadata"] = "FACTS_REQUIRED",
-        ["extract_evidence_fields"] = "FACTS_REQUIRED",
-        ["create_exception_review"] = "DECISION_READY",
-        ["create_service_dispute_case"] = "DECISION_READY",
-        ["get_change_quote"] = "DECISION_READY",
-        ["submit_order_change"] = "CONFIRMATION_REQUIRED",
-        ["create_finance_case"] = "DECISION_READY",
-        ["get_responsibility_chain"] = "DECISION_READY",
-        ["get_group_order_breakdown"] = "FACTS_REQUIRED",
-        ["get_partial_cancel_quote"] = "DECISION_READY",
-        ["get_supplier_case"] = "WAITING_EXTERNAL",
-        ["accept_supplier_offer"] = "OPTION_PRESENTED",
-        ["get_handoff_status"] = "ESCALATED",
-        ["confirm_recovery_outcome"] = "ESCALATED",
-        ["reserve_mock_alternative"] = "OPTION_PRESENTED",
-    };
+        yield return new AgentStreamEvent("status", "started");
+        yield return new AgentStreamEvent("status", "assembling_context");
+
+        AgentDecisionDto? decision = null;
+        string? error = null;
+        try
+        {
+            decision = await HandleAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+
+        if (error is not null)
+        {
+            yield return new AgentStreamEvent("error", error);
+            yield break;
+        }
+
+        yield return new AgentStreamEvent("status", "agent_completed");
+
+        foreach (var step in decision!.Steps)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new AgentStreamEvent("step", step.Step, step);
+            await Task.Yield();
+        }
+
+        foreach (var tool in decision.ToolSequence)
+            yield return new AgentStreamEvent("tool", tool);
+
+        if (decision.HasPendingApprovals)
+            yield return new AgentStreamEvent("approval_required", decision.AgentSessionId, decision.PendingApprovals);
+
+        foreach (var chunk in ChunkText(decision.Reply, 12))
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new AgentStreamEvent("reply_delta", chunk);
+            await Task.Delay(12, ct);
+        }
+
+        yield return new AgentStreamEvent("done", null, decision);
+    }
+
+    private static IEnumerable<string> ChunkText(string text, int size)
+    {
+        if (string.IsNullOrEmpty(text)) yield break;
+        for (var i = 0; i < text.Length; i += size)
+            yield return text[i..Math.Min(i + size, text.Length)];
+    }
 
     private static bool NeedsEvidence(string scenarioId, AgentSignals signals) =>
         scenarioId is "G" || (scenarioId is "F" && !signals.HasNegotiationReason);
-
-    private static bool ToolGatewayWrite(string name) =>
-        name.StartsWith("submit_") || name.StartsWith("create_") || name.StartsWith("accept_") ||
-        name.StartsWith("reserve_") || name.StartsWith("confirm_") || name.StartsWith("schedule_");
-
-    private static ToolCall Read(string traceId, string tool, string userId, HotelOrder order, ScenarioFixture scenario, string state) =>
-        new(traceId, tool, ToolAccess.Read, userId, order.OrderId, scenario.CaseId, scenario.RiskLevel, state, new Dictionary<string, object?>());
 
     private static string BuildReply(RuleDecision d, HotelOrder order) => d.Action switch
     {
@@ -474,12 +456,29 @@ public sealed class EvalRunner(IRefundDataStore store, IAgentOrchestrator orches
         }
 
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
-        return doc.RootElement.GetProperty("cases").EnumerateArray().Select(c =>
-            new EvalCaseDto(
-                c.GetProperty("id").GetString()!,
-                c.GetProperty("message").GetString()!,
-                c.GetProperty("expected_scenario").GetString()!,
-                c.GetProperty("risk_level").GetString()!)).ToList();
+        return doc.RootElement.GetProperty("cases").EnumerateArray().Select(ParseCase).ToList();
+    }
+
+    private static EvalCaseDto ParseCase(JsonElement c)
+    {
+        static List<string>? StrList(JsonElement el, string name) =>
+            el.TryGetProperty(name, out var arr) && arr.ValueKind == JsonValueKind.Array
+                ? arr.EnumerateArray().Select(x => x.GetString()!).Where(s => !string.IsNullOrWhiteSpace(s)).ToList()
+                : null;
+
+        decimal? Dec(JsonElement el, string name) =>
+            el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDecimal() : null;
+
+        return new EvalCaseDto(
+            c.GetProperty("id").GetString()!,
+            c.GetProperty("message").GetString()!,
+            c.GetProperty("expected_scenario").GetString()!,
+            c.GetProperty("risk_level").GetString()!,
+            StrList(c, "expected_tools_subsequence"),
+            StrList(c, "forbidden_reply_substrings"),
+            c.TryGetProperty("expected_action", out var act) ? act.GetString() : null,
+            Dec(c, "min_refund_amount"),
+            Dec(c, "max_fee_amount"));
     }
 
     public async Task<IReadOnlyList<EvalResultDto>> RunAllAsync(CancellationToken ct = default)
@@ -495,9 +494,36 @@ public sealed class EvalRunner(IRefundDataStore store, IAgentOrchestrator orches
             {
                 try
                 {
-                    var decision = await orchestrator.HandleAsync(new AgentMessageRequest(c.Message, c.ExpectedScenario, ResetDemo: false), ct);
-                    detail = $"{decision.Action}/{decision.CaseStatus}";
-                    passed = decision.ScenarioId == c.ExpectedScenario;
+                    var decision = await orchestrator.HandleAsync(
+                        new AgentMessageRequest(c.Message, c.ExpectedScenario, ResetDemo: false), ct);
+                    var violations = new List<string>();
+                    if (decision.ScenarioId != c.ExpectedScenario)
+                        violations.Add($"scenario={decision.ScenarioId}");
+                    if (!string.IsNullOrWhiteSpace(c.ExpectedAction) &&
+                        !string.Equals(decision.Action, c.ExpectedAction, StringComparison.Ordinal))
+                        violations.Add($"action={decision.Action} expected={c.ExpectedAction}");
+                    if (c.ExpectedToolsSubsequence is { Count: > 0 } &&
+                        !IsSubsequence(c.ExpectedToolsSubsequence, decision.ToolSequence))
+                        violations.Add($"tools missing subsequence [{string.Join(',', c.ExpectedToolsSubsequence)}]");
+                    if (c.ForbiddenReplySubstrings is { Count: > 0 })
+                    {
+                        foreach (var bad in c.ForbiddenReplySubstrings)
+                        {
+                            if (decision.Reply.Contains(bad, StringComparison.Ordinal))
+                                violations.Add($"forbidden reply contains '{bad}'");
+                        }
+                    }
+                    if (c.MinRefundAmount is not null &&
+                        (decision.RefundAmount is null || decision.RefundAmount < c.MinRefundAmount))
+                        violations.Add($"refund={decision.RefundAmount} < min {c.MinRefundAmount}");
+                    if (c.MaxFeeAmount is not null &&
+                        decision.FeeAmount is not null && decision.FeeAmount > c.MaxFeeAmount)
+                        violations.Add($"fee={decision.FeeAmount} > max {c.MaxFeeAmount}");
+
+                    passed = violations.Count == 0;
+                    detail = passed
+                        ? $"{decision.Action}/{decision.CaseStatus}; tools={decision.ToolSequence.Count}"
+                        : string.Join("; ", violations);
                 }
                 catch (Exception ex)
                 {
@@ -509,5 +535,15 @@ public sealed class EvalRunner(IRefundDataStore store, IAgentOrchestrator orches
             results.Add(new EvalResultDto(c.Id, c.Message, c.ExpectedScenario, routed, passed, detail));
         }
         return results;
+    }
+
+    private static bool IsSubsequence(IReadOnlyList<string> expected, IReadOnlyList<string> actual)
+    {
+        var i = 0;
+        foreach (var item in actual)
+        {
+            if (i < expected.Count && item == expected[i]) i++;
+        }
+        return i == expected.Count;
     }
 }

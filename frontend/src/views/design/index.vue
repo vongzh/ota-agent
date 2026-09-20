@@ -3,7 +3,7 @@
     <div class="workspace-heading">
       <div>
         <h1>Agent 设计</h1>
-        <p>对齐 Hotel-refund 完整 Workflow：READ/WRITE Gate、回环追问、交易/协同双路径与 Verifier。</p>
+        <p>对齐 StayOTA Agent Workflow：READ/WRITE Gate、回环追问、交易/协同双路径与 Verifier。</p>
       </div>
       <div class="heading-actions">
         <button class="ghost-btn" :disabled="loading" @click="runWorkflows">跑 A–L Workflow</button>

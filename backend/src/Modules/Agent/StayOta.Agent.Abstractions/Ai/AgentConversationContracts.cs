@@ -18,14 +18,17 @@ public sealed record AgentTurnRequest(
     string ScenarioId,
     RiskLevel RiskLevel,
     string ConversationState,
-    IReadOnlyList<string> PlannedTools,
+    /// <summary>Soft tool hints (e.g. scenario required tools). Executed by Agent, not Orchestrator.</summary>
+    IReadOnlyList<string> HintTools,
     string SuggestedReply,
     bool RequireWriteApproval,
     string? WriteToolName,
     IDictionary<string, object?> AmbientArguments,
     string? ConfirmationToken = null,
     string? IdempotencyKey = null,
-    int? ExpectedOrderVersion = null);
+    int? ExpectedOrderVersion = null,
+    string? ExistingSessionId = null,
+    bool AllowAutonomousToolSelection = true);
 
 public sealed record ApprovalResponseRequest(
     string SessionId,

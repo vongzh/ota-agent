@@ -5,7 +5,7 @@
         <span class="brand-mark">旅</span>
         <div>
           <strong>StayOTA Agent</strong>
-          <small>hotel 工作台 × Hotel-refund 受控核</small>
+          <small>酒店 OTA Agent · 退款演示</small>
         </div>
       </div>
       <nav class="primary-nav" aria-label="主导航">

@@ -3,7 +3,7 @@
     <div class="workspace-heading">
       <div>
         <h1>智能处理台</h1>
-        <p>结论、金额与权限来自规则与 Tool；模型只负责理解与表达。</p>
+        <p>结论、金额与权限来自规则与 Tool；模型侧自主选 Tool，同会话可多轮续跑。</p>
       </div>
       <button class="ghost-btn" :disabled="loading" @click="resetAndRun">重置当前场景</button>
     </div>
@@ -90,7 +90,11 @@
             </div>
             <div class="message" v-if="loading">
               <div class="message-avatar agent-avatar">AI</div>
-              <div class="bubble thinking">正在走意图 → 订单 → 政策 → 规则 → 风险 → 动作…</div>
+              <div class="bubble thinking">
+                <template v-if="streamStatus">{{ streamStatus }}</template>
+                <template v-else>正在走意图 → 订单 → 政策 → 规则 → 风险 → 动作…</template>
+                <p v-if="streamReply" class="stream-reply">{{ streamReply }}</p>
+              </div>
             </div>
             <div class="message" v-if="decision && !loading">
               <div class="message-avatar agent-avatar">AI</div>
@@ -293,7 +297,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { fetchHosting, fetchScenarios, runAgentMessage, respondToApproval } from '@/api/agent'
+import { fetchHosting, fetchScenarios, runAgentMessageStream, respondToApproval } from '@/api/agent'
 import type { AgentDecision, Scenario } from '@/types'
 
 const scenarios = ref<Scenario[]>([])
@@ -305,6 +309,8 @@ const loading = ref(false)
 const errorText = ref('')
 const mobilePane = ref<'chat' | 'decision'>('chat')
 const demoEnabled = ref(true)
+const streamStatus = ref('')
+const streamReply = ref('')
 
 const pipeline = computed(() => decision.value?.steps ?? [
   { step: '意图识别', status: 'pending', detail: '' },
@@ -400,15 +406,31 @@ async function resetAndRun() {
 async function run(payload: Record<string, unknown>) {
   loading.value = true
   errorText.value = ''
+  streamStatus.value = '开始处理…'
+  streamReply.value = ''
   userMessage.value = String(payload.message || '')
   try {
-    decision.value = await runAgentMessage(payload)
+    const resumeSession =
+      !payload.resetDemo &&
+      decision.value?.agentSessionId &&
+      payload.scenarioId === activeId.value
+    if (resumeSession) {
+      payload = { ...payload, agentSessionId: decision.value!.agentSessionId }
+    }
+    decision.value = await runAgentMessageStream(payload, {
+      onStep: (text) => { streamStatus.value = `步骤：${text}` },
+      onTool: (name) => { streamStatus.value = `Tool：${name}` },
+      onReplyDelta: (chunk) => { streamReply.value += chunk },
+      onError: (msg) => { errorText.value = msg },
+    })
   } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    errorText.value = err.response?.data?.message || 'Agent 调用失败'
+    const err = e as { response?: { data?: { message?: string } }; message?: string }
+    errorText.value = err.response?.data?.message || err.message || 'Agent 调用失败'
     decision.value = null
   } finally {
     loading.value = false
+    streamStatus.value = ''
+    streamReply.value = ''
   }
 }
 
@@ -658,6 +680,12 @@ function actionLabel(action: string) {
   border-color: transparent;
 }
 .bubble.thinking { color: var(--color-ink-muted); font-style: italic; }
+.stream-reply {
+  margin-top: 0.55rem;
+  font-style: normal;
+  color: var(--color-ink);
+  white-space: pre-wrap;
+}
 .bubble.error { background: var(--color-danger-soft); color: var(--color-danger); border-color: oklch(0.82 0.06 28); }
 
 .solution-card {
