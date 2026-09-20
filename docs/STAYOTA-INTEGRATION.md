@@ -5,12 +5,12 @@
 
 ---
 
-## 1. 推荐形态：独立领域服务（Refund Agent）
+## 1. 推荐形态：独立领域服务（OTA Agent）
 
 ```
 ┌─────────────────────────┐         ┌──────────────────────────────┐
-│  StayOTA 主站            │         │  stayota-refund-agent        │
-│  · 登录/租户/菜单/权限    │  HTTP   │  · 意图/规则/风险/33 Tool     │
+│  StayOTA 主站            │         │  stayota-agent               │
+│  · 登录/租户/菜单/权限    │  HTTP   │  · 通用运行时 + 垂直插件      │
 │  · 订单/支付主数据        │◄──────►│  · FunctionApproval / HITL    │
 │  · 后台 Vue（后续重做页）  │  MCP    │  · Case / Trace / Session     │
 │  · API Gateway           │         │  · Eval（仅 Demo）            │
@@ -19,21 +19,21 @@
 
 **为什么不是「塞进主站一个 Class Library 就完事」：**
 
-- 退款 Agent 有独立状态机、写门禁、长会话与审批流，和主站订单 CRUD 生命周期不同
-- 可单独扩缩、单独发版、故障隔离
+- OTA Agent 有独立会话、写门禁、长会话与审批流，和主站订单 CRUD 生命周期不同
+- 可单独扩缩、单独发版、故障隔离；退款只是首个垂直插件，非边界
 - 主站前端重做时，只换调用面，不必绑死进程内引用
 
-**可选过渡：** 早期用 `AddStayOtaAgent()` + `AddRefundPlugin()` 挂进同一 Host（同仓联调）；接口与配置仍按「服务边界」设计，方便以后拆进程。
+**可选过渡：** 早期用 `AddStayOtaAgent()` + `AddAgentPlugin<RefundAgentPlugin>()` 挂进同一 Host（同仓联调）；接口与配置仍按「服务边界」设计，方便以后拆进程。
 
 ---
 
 ## 2. 模块边界（谁负责什么）
 
-| 能力 | StayOTA 主站 | Refund Agent 模块 |
+| 能力 | StayOTA 主站 | OTA Agent 模块 |
 | --- | --- | --- |
 | 身份 / SSO / 角色菜单 | ✅ | 校验 Token / ApiKey，不自建账号体系 |
 | 订单、政策、支付真相源 | ✅ | 只读（`Production:Http\|Mcp`），写操作走受控 Tool |
-| 退款决策、风险、33 Tool | | ✅ |
+| 垂直业务决策、风险、Tool（如退款） | | ✅ 插件贡献 |
 | HITL / FunctionApproval | 主站页面触发 | ✅ 会话与审批状态 |
 | Case / Trace / Eval | 可订阅事件 | ✅ 权威存储 |
 | 后台页面（设计/处理台/看板） | ✅ **后续按主站风格重做** | 本仓 Vue 仅 Demo / 联调 |
@@ -45,7 +45,7 @@
 ### 3.1 身份与网关
 
 - [ ] 统一鉴权：JWT（推荐）或 mTLS；短期可用 shared `ApiKey`
-- [ ] Gateway 路由：`/refund-agent/**` → Agent 服务；透传 `Authorization` / 租户头
+- [ ] Gateway 路由：`/ota-agent/**` → Agent 服务；透传 `Authorization` / 租户头
 - [ ] 服务间调用身份：主站 server-to-server 调 Agent 时的 client credentials
 
 ### 3.2 订单 / 政策 / 支付只读 API（Production Http 契约）
@@ -119,9 +119,9 @@ Demo-only（正式 `DemoEnabled=false` 关闭）：
 
 ```csharp
 services.AddStayOtaAgent(configuration);   // Runtime：Redis / ChatClient / Conversation
-services.AddRefundPlugin(configuration);   // 垂直包：EF(schema) / 33 Tool / Rules / MCP
-// PathBase 可选：Hosting:PathBase=/refund-agent
-// Schema 隔离：AgentStorage:Schema=agent_refund（默认）
+services.AddAgentPlugin<RefundAgentPlugin>(configuration); // 退款垂直演示包（可换其他垂直）
+// PathBase 可选：Hosting:PathBase=/ota-agent
+// Schema 隔离：AgentStorage:Schema=agent（默认，与垂直业务解耦）
 ```
 
 模块布局（对齐 StayOTA Scheduling）：
@@ -130,7 +130,7 @@ services.AddRefundPlugin(configuration);   // 垂直包：EF(schema) / 33 Tool /
 src/Modules/Agent/
   StayOta.Agent.Abstractions   # 契约 / Options / Domain
   StayOta.Agent                # Runtime（AddStayOtaAgent）
-  StayOta.Agent.Plugins.Refund # 退款垂直包（AddRefundPlugin）
+  StayOta.Agent.Plugins.Refund # 退款垂直演示包（AddAgentPlugin）
 src/Hosts/StayOta.Agent.Host   # 独立 Host
 ```
 

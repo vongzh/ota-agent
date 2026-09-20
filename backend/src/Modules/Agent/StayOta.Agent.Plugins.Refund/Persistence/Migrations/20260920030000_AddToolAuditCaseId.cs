@@ -15,20 +15,20 @@ public class AddToolAuditCaseId : Migration
     {
         migrationBuilder.AddColumn<string>(
             name: "CaseId",
-            schema: "agent_refund",
+            schema: "agent",
             table: "tool_audits",
             type: "text",
             nullable: true);
 
         migrationBuilder.CreateIndex(
             name: "IX_tool_audits_CaseId",
-            schema: "agent_refund",
+            schema: "agent",
             table: "tool_audits",
             column: "CaseId");
 
         migrationBuilder.CreateIndex(
             name: "IX_tool_audits_TraceId",
-            schema: "agent_refund",
+            schema: "agent",
             table: "tool_audits",
             column: "TraceId");
     }
@@ -38,17 +38,17 @@ public class AddToolAuditCaseId : Migration
     {
         migrationBuilder.DropIndex(
             name: "IX_tool_audits_CaseId",
-            schema: "agent_refund",
+            schema: "agent",
             table: "tool_audits");
 
         migrationBuilder.DropIndex(
             name: "IX_tool_audits_TraceId",
-            schema: "agent_refund",
+            schema: "agent",
             table: "tool_audits");
 
         migrationBuilder.DropColumn(
             name: "CaseId",
-            schema: "agent_refund",
+            schema: "agent",
             table: "tool_audits");
     }
 }

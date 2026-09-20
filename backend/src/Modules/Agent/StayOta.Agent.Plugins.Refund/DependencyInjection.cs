@@ -41,7 +41,7 @@ public sealed class RefundAgentPlugin : IAgentPlugin
         {
             if (isProductionLike)
                 throw new InvalidOperationException("ConnectionStrings:Postgres is required when DemoEnabled=false");
-            pg = "Host=127.0.0.1;Port=5432;Database=stayota_refund;Username=stayota;Password=stayota";
+            pg = "Host=127.0.0.1;Port=5432;Database=stayota_agent;Username=stayota;Password=stayota";
         }
 
         services.AddDbContext<AppDbContext>((_, opt) => opt.UseNpgsql(pg));

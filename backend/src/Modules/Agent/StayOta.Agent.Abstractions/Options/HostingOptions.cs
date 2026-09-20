@@ -29,11 +29,11 @@ public sealed class HostingOptions
     public bool AllowDeterministicFallback { get; set; } = true;
 
     /// <summary>
-    /// Optional path base when mounted inside StayOTA host (e.g. /refund-agent).
+    /// Optional path base when mounted inside StayOTA host (e.g. /ota-agent).
     /// Empty = root. Affects MapControllers / MapMcp relative to host.
     /// </summary>
     public string PathBase { get; set; } = "";
 
-    /// <summary>Public API route prefix documentation only; controllers stay at /api.</summary>
-    public string ModuleId { get; set; } = "stayota-refund-agent";
+    /// <summary>Public module id for health/docs; controllers stay at /api.</summary>
+    public string ModuleId { get; set; } = "stayota-agent";
 }
